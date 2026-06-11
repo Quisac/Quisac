@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Quisac</title>
+  <link rel="stylesheet" href="index.css" />
+</head>
+<body>
+
+  <aside class="sidebar">
+    <div class="sidebar-brand">
+      <span class="brand-name">Quisac</span>
+      <span class="brand-sub">payment-api · connected</span>
+    </div>
+    <nav class="sidebar-nav">
+      <div class="nav-group-label">MONITOR</div>
+      <a href="#" class="nav-item active">Dashboard</a>
+      <a href="#" class="nav-item">Code graph</a>
+      <a href="#" class="nav-item">Incidents</a>
+      <div class="nav-group-label">MANAGE</div>
+      <a href="#" class="nav-item">Pull requests</a>
+      <a href="#" class="nav-item">Patterns</a>
+      <div class="nav-group-label">INFO</div>
+      <a href="#" class="nav-item">Docs</a>
+      <a href="#" class="nav-item">Settings</a>
+    </nav>
+  </aside>
+
+  <main class="main">
+
+    <header class="topbar">
+      <h1 class="page-title">Dashboard</h1>
+      <div class="topbar-badges">
+        <span class="badge badge-warning">1 resolving</span>
+        <span class="badge badge-success">12 resolved today</span>
+      </div>
+    </header>
+
+    <section class="card">
+      <div class="card-header">
+        <span class="card-title">Codebase graph</span>
+        <span class="card-meta">47 services · 312 edges · indexed 4 min ago</span>
+      </div>
+      <div class="graph-area" id="graph"></div>
+      <div class="graph-legend">
+        <span class="legend-item legend-failing">failing</span>
+        <span class="legend-item legend-root">root cause</span>
+        <span class="legend-item legend-healthy">healthy</span>
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="card-header">
+        <span class="card-title">PagerDuty incident log</span>
+        <span class="card-meta card-meta-live">live · updated just now</span>
+      </div>
+      <div class="log-list">
+        <div class="log-row">
+          <span class="log-dot dot-red"></span>
+          <span class="log-time">19:20:08</span>
+          <span class="log-msg">ConnectionTimeout — db-primary:5432 unreachable after 3 retries</span>
+          <span class="log-svc">payment-svc</span>
+        </div>
+        <div class="log-row">
+          <span class="log-dot dot-red"></span>
+          <span class="log-time">19:20:09</span>
+          <span class="log-msg">High error rate — 5xx responses exceeding threshold (42%)</span>
+          <span class="log-svc">payment-svc</span>
+        </div>
+        <div class="log-row">
+          <span class="log-dot dot-orange"></span>
+          <span class="log-time">19:20:11</span>
+          <span class="log-msg">Connection pool exhausted — max_connections=20 reached</span>
+          <span class="log-svc">db-pool</span>
+        </div>
+        <div class="log-row">
+          <span class="log-dot dot-blue"></span>
+          <span class="log-time">19:20:14</span>
+          <span class="log-msg">Quisac — graph traversal started · path: payment-svc → db-pool → postgres</span>
+          <span class="log-svc">quisac</span>
+        </div>
+        <div class="log-row">
+          <span class="log-dot dot-blue"></span>
+          <span class="log-time">19:20:15</span>
+          <span class="log-msg">Pattern matched — ConnectionPool misconfiguration · confidence 94% · 0 LLM tokens</span>
+          <span class="log-svc">quisac</span>
+        </div>
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="card-header">
+        <span class="card-title card-title-green">✓ Resolution — incident #INC-4821</span>
+        <span class="badge badge-success-outline">resolved · pattern match</span>
+      </div>
+      <div class="resolution-grid">
+        <div>
+          <div class="res-label">ROOT CAUSE</div>
+          <div class="res-value">db-pool misconfiguration</div>
+          <div class="res-sub">max_connections too low for traffic spike</div>
+        </div>
+        <div>
+          <div class="res-label">RESOLUTION METHOD</div>
+          <div class="res-value">Pattern match — Tier 1</div>
+          <div class="res-sub">0 LLM tokens used · resolved in 1.2s</div>
+        </div>
+      </div>
+      <div class="res-files-label">Files identified by graph traversal</div>
+      <div class="res-files">
+        <div class="res-file-row">
+          <span>src/db/pool.py</span>
+          <span class="diff-add">+2</span>
+          <span class="diff-del">−1</span>
+        </div>
+        <div class="res-file-row">
+          <span>src/config/database.py</span>
+          <span class="diff-add">+1</span>
+          <span class="diff-del"></span>
+        </div>
+      </div>
+      <div class="pr-bar">
+        <div class="pr-info">
+          <span class="pr-title">fix: increase db connection pool limit for payment-svc</span>
+          <span class="badge badge-success">ready to merge</span>
+          <span class="pr-meta">opened by quisac-bot · branch fix/inc-4821-db-pool · 2 files changed</span>
+        </div>
+        <button class="btn-pr">↑↓ View PR</button>
+      </div>
+    </section>
+
+  </main>
+
+  <script src="index.js"></script>
+</body>
+</html>
