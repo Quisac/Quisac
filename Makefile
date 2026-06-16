@@ -4,20 +4,19 @@
 ## make test           — run all tests
 ## make test/frontend/x
 ## make test/backend/x
-
 .PHONY: dev test
 
 dev:
-	python3 src/main.py
+	go run src/main.go
 
 test:
 	@echo "── frontend ──"
 	node --test tests/frontend/*.test.js
 	@echo "── backend ──"
-	pytest tests/backend/
+	go test ./tests/backend/...
 
 test/frontend/%:
 	node --test tests/frontend/$*.test.js
 
 test/backend/%:
-	pytest tests/backend/test_$*.py
+	go test ./tests/backend/ -run $*

@@ -8,17 +8,13 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
-
     steps:
       - uses: actions/checkout@v4
 
-      - name: set up python
-        uses: actions/setup-python@v5
+      - name: set up go
+        uses: actions/setup-go@v5
         with:
-          python-version: "3.11"
-
-      - name: install python deps
-        run: pip install pytest
+          go-version: "1.22"
 
       - name: set up node
         uses: actions/setup-node@v4
@@ -27,7 +23,7 @@ jobs:
 
       - name: run backend tests
         run: |
-           if [ -d "tests/backend" ]; then pytest tests/backend/; else echo "no tests yet"; fi
+          if [ -d "tests/backend" ]; then go test ./tests/backend/...; else echo "no tests yet"; fi
 
       - name: run frontend tests
         run: |
