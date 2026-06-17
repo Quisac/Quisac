@@ -73,7 +73,7 @@ const nodes = [
       const line = document.createElementNS(ns, "line");
       line.setAttribute("x1", p1.x); line.setAttribute("y1", p1.y);
       line.setAttribute("x2", p2.x); line.setAttribute("y2", p2.y);
-      line.setAttribute("stroke", "#f97316");
+      line.setAttribute("stroke", "#f97316")ls;
       line.setAttribute("stroke-width", "1.5");
       line.setAttribute("stroke-dasharray", "4 2");
       svg.appendChild(line);
