@@ -31,18 +31,3 @@ jobs:
       - name: run frontend tests
         run: |
           if [ -d "tests/frontend" ]; then node --test tests/frontend/*.test.js; else echo "no tests yet"; fi
-
-  deploy:
-    needs: test
-    runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: install railway
-        run: npm install -g @railway/cli
-
-      - name: deploy to railway
-        run: railway up --detach --service ${{secrets.RAILWAY_SERVICE_ID}}
-        env:
-          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
