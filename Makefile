@@ -15,7 +15,7 @@ test:
 	@echo "── frontend ──"
 	node --test tests/frontend/*.test.js
 	@echo "── backend ──"
-	go test ./test/... -v
+	go test ./tests/... -v
 
 test/frontend/%:
 	node --test tests/frontend/$*.test.js
