@@ -19,8 +19,8 @@
         <a class="nav-link" href="#how">How it works</a>
         <a class="nav-link" href="#dashboard-preview">Dashboard</a>
         <a class="nav-link" href="#">Docs</a>
-        <a id="landing-signin" href="#" onclick="showDashboard()">Sign in</a>
-        <a id="landing-cta" href="#" onclick="showDashboard()">Get early access</a>
+        <a id="landing-signin" href="#" onclick="showDashboard(); return false;">Sign in</a>
+        <a id="landing-cta" href="/github/connect">Get early access</a>
       </div>
     </nav>
 
@@ -29,7 +29,7 @@
       <h1 id="hero-title">Incidents fix themselves.<br>Your team just merges.</h1>
       <p id="hero-sub">Quisac watches your alerts, traverses your codebase,<br>and opens a ready-to-merge PR — before your team wakes up.</p>
       <div id="hero-cta-row">
-        <a class="btn-primary" href="#" onclick="showDashboard()">Connect your repo</a>
+        <a class="btn-primary" href="/github/connect">Connect your repo</a>
         <a class="btn-secondary" href="#how">See how it works</a>
       </div>
       <div id="hero-stats">
@@ -155,7 +155,7 @@
         </div>
       </div>
       <div style="text-align:center;margin-top:2rem;">
-        <a class="btn-primary" href="#" onclick="showDashboard()">Connect your repo →</a>
+        <a class="btn-primary" href="/github/connect">Connect your repo →</a>
       </div>
     </section>
 
@@ -168,23 +168,42 @@
 
   <!-- DASHBOARD -->
   <div id="dashboard" style="display:none;">
-
     <div id="app">
 
       <div id="topbar">
         <div id="topbar-left">
-          <a id="logo" href="#" onclick="showLanding()">Quis<span>ac</span></a>
+          <a id="logo" href="#" onclick="showLanding(); return false;">Quis<span>ac</span></a>
         </div>
         <div id="topbar-right">
+          <div id="org-pill" style="display:none;">
+            <svg id="org-avatar" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <rect width="20" height="20" rx="5" fill="#1a73e8"/>
+              <text x="10" y="14.5" text-anchor="middle" font-family="Google Sans,Roboto,sans-serif" font-size="11" font-weight="500" fill="white">Q</text>
+            </svg>
+            <span id="org-name"></span>
+          </div>
           <span class="badge badge-amber">1 resolving</span>
           <span class="badge badge-green">12 resolved today</span>
-          <a id="connect-btn" href="#">Connect repo</a>
+          <a id="connect-btn" href="/github/connect">Connect repo</a>
         </div>
       </div>
 
       <div id="content">
 
         <div id="sidebar">
+          <div id="sidebar-org" style="display:none;">
+            <div id="sidebar-org-inner">
+              <svg viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg" style="width:16px;height:16px;flex-shrink:0;">
+                <rect width="20" height="20" rx="5" fill="#1a73e8"/>
+                <text x="10" y="14.5" text-anchor="middle" font-family="Google Sans,Roboto,sans-serif" font-size="11" font-weight="500" fill="white">Q</text>
+              </svg>
+              <div>
+                <div id="sidebar-org-name" style="font-size:13px;font-weight:500;color:var(--text);"></div>
+                <div style="font-size:11px;color:var(--green);margin-top:1px;">● connected</div>
+              </div>
+            </div>
+          </div>
+
           <div class="sidebar-section">
             <span class="sidebar-label">MONITOR</span>
             <div class="sidebar-item active">
@@ -259,10 +278,16 @@
             </div>
           </div>
 
+          <!-- Repo connected banner — hidden until OAuth completes -->
+          <div id="repo-banner" style="display:none;">
+            <span class="banner-dot"></span>
+            <span id="banner-text"></span>
+          </div>
+
           <div id="graph-card">
             <div class="card-header">
               <span class="card-title">Codebase graph</span>
-              <span class="card-meta">47 services · 312 edges · indexed 4 min ago</span>
+              <span class="card-meta" id="graph-meta">47 services · 312 edges · indexed 4 min ago</span>
             </div>
             <div id="graph-body">
               <svg viewBox="0 0 760 200" xmlns="http://www.w3.org/2000/svg" style="width:100%;height:100%;">

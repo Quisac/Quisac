@@ -1,19 +1,19 @@
 /* ── VARIABLES ── */
 :root {
-  --blue:        #1a73e8;
-  --blue-lt:     #e8f0fe;
-  --green:       #188038;
-  --green-lt:    #e6f4ea;
-  --red:         #d93025;
-  --amber:       #e37400;
-  --amber-lt:    #fef0cd;
-  --border:      #e8eaed;
-  --border2:     #dadce0;
-  --text:        #202124;
-  --sub:         #5f6368;
-  --muted:       #80868b;
-  --bg:          #f0f7ff;
-  --surface:     #ffffff;
+  --blue:     #1a73e8;
+  --blue-lt:  #e8f0fe;
+  --green:    #188038;
+  --green-lt: #e6f4ea;
+  --red:      #d93025;
+  --amber:    #e37400;
+  --amber-lt: #fef0cd;
+  --border:   #e8eaed;
+  --border2:  #dadce0;
+  --text:     #202124;
+  --sub:      #5f6368;
+  --muted:    #80868b;
+  --bg:       #f0f7ff;
+  --surface:  #ffffff;
 }
 
 /* ── RESET ── */
@@ -57,6 +57,7 @@ body {
   cursor: pointer;
   text-decoration: none;
   transition: background 0.15s;
+  display: inline-block;
 }
 .btn-primary:hover { background: #1557b0; }
 
@@ -71,6 +72,7 @@ body {
   cursor: pointer;
   text-decoration: none;
   transition: border-color 0.15s;
+  display: inline-block;
 }
 .btn-secondary:hover { border-color: var(--blue); }
 
@@ -85,7 +87,7 @@ body {
 .card-meta  { font-size: 12px; color: var(--muted); }
 .card-meta.live { color: var(--green); }
 
-.log-dot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
+.log-dot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; display: inline-block; }
 .ld-red   { background: var(--red); }
 .ld-blue  { background: var(--blue); }
 .ld-green { background: var(--green); }
@@ -376,6 +378,28 @@ body {
   text-decoration: none;
 }
 
+/* Org pill in topbar (shown after connect) */
+#org-pill {
+  display: none;
+  align-items: center;
+  gap: 7px;
+  background: var(--bg);
+  border: 1px solid var(--border2);
+  border-radius: 100px;
+  padding: 4px 12px 4px 6px;
+}
+#org-pill #org-avatar {
+  width: 20px;
+  height: 20px;
+  border-radius: 4px;
+  flex-shrink: 0;
+}
+#org-name {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text);
+}
+
 #connect-btn {
   font-size: 13px;
   font-weight: 500;
@@ -389,12 +413,30 @@ body {
 }
 #connect-btn:hover { background: #1557b0; }
 
+/* ── SIDEBAR ── */
 #sidebar {
   height: 100%;
   overflow-y: auto;
   background: var(--surface);
   border-right: 1px solid var(--border);
-  padding: 1rem 0;
+  padding: 0;
+}
+
+/* Org block at top of sidebar */
+#sidebar-org {
+  display: none;
+  padding: 0.75rem;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 0.5rem;
+}
+#sidebar-org-inner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
 }
 
 .sidebar-section { padding: 0 0.75rem; margin-bottom: 1rem; }
@@ -423,6 +465,7 @@ body {
 .sidebar-item:hover { background: var(--bg); }
 .sidebar-item.active { background: var(--blue-lt); color: var(--blue); font-weight: 500; }
 
+/* ── MAIN ── */
 #main {
   height: 100%;
   overflow-y: auto;
@@ -434,11 +477,33 @@ body {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 1.5rem;
+  margin-bottom: 1rem;
 }
 #main-title { font-size: 22px; font-weight: 400; }
 #main-badges { display: flex; align-items: center; gap: 8px; }
 
+/* Repo connected banner */
+#repo-banner {
+  display: none;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--green);
+  background: var(--green-lt);
+  border: 1px solid #b7dfca;
+  border-radius: 6px;
+  padding: 8px 14px;
+  margin-bottom: 1.25rem;
+}
+.banner-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--green);
+  flex-shrink: 0;
+}
+
+/* ── CARDS ── */
 #graph-card, #log-card, #resolution-card {
   background: var(--surface);
   border: 1px solid var(--border);
