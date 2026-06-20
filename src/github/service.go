@@ -9,6 +9,8 @@ import (
 	"net/url"
 )
 
+var GitHubAPIURL = "https://api.github.com"
+
 type Service struct {
 	cfg    Config
 	client *http.Client
@@ -69,6 +71,10 @@ func (s *Service) ExchangeCode(code string) (string, error) {
 		return "", fmt.Errorf("%s: %s", result.Error, result.ErrorDesc)
 	}
 
+	if result.AccessToken == "" {
+		return "", fmt.Errorf("missing access token")
+	}
+
 	return result.AccessToken, nil
 }
 
@@ -78,7 +84,7 @@ func (s *Service) FindInstallation(
 ) (*Installation, error) {
 	req, err := http.NewRequest(
 		http.MethodGet,
-		"https://api.github.com/user/installations",
+		GitHubAPIURL+"/user/installations",
 		nil,
 	)
 	if err != nil {
@@ -111,12 +117,12 @@ func (s *Service) FindInstallation(
 	return nil, fmt.Errorf("installation not found")
 }
 
-func randomState() (string, error) {
-	b := make([]byte, 16)
+func RandomState() (string, error) {
+	bytes := make([]byte, 16)
 
-	if _, err := rand.Read(b); err != nil {
+	if _, err := rand.Read(bytes); err != nil {
 		return "", err
 	}
 
-	return hex.EncodeToString(b), nil
+	return hex.EncodeToString(bytes), nil
 }

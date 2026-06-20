@@ -7,13 +7,13 @@ import (
 )
 
 const (
-	stateCookie   = "quisac_oauth_state"
-	sessionCookie = "quisac_gh"
+	StateCookieName   = "quisac_oauth_state"
+	SessionCookieName = "quisac_gh"
 )
 
-func setStateCookie(w http.ResponseWriter, state string) {
+func SetStateCookie(w http.ResponseWriter, state string) {
 	http.SetCookie(w, &http.Cookie{
-		Name:     stateCookie,
+		Name:     StateCookieName,
 		Value:    state,
 		Path:     "/",
 		MaxAge:   300,
@@ -22,17 +22,21 @@ func setStateCookie(w http.ResponseWriter, state string) {
 	})
 }
 
-func clearStateCookie(w http.ResponseWriter) {
+func ClearStateCookie(w http.ResponseWriter) {
 	http.SetCookie(w, &http.Cookie{
-		Name:   stateCookie,
+		Name:   StateCookieName,
 		Value:  "",
 		Path:   "/",
 		MaxAge: -1,
 	})
 }
 
-func saveSession(w http.ResponseWriter, token string, inst *Installation) error {
-	b, err := json.Marshal(session{
+func SaveSession(
+	w http.ResponseWriter,
+	token string,
+	inst *Installation,
+) error {
+	data, err := json.Marshal(Session{
 		Token:        token,
 		Installation: inst,
 	})
@@ -41,8 +45,8 @@ func saveSession(w http.ResponseWriter, token string, inst *Installation) error 
 	}
 
 	http.SetCookie(w, &http.Cookie{
-		Name:     sessionCookie,
-		Value:    hex.EncodeToString(b),
+		Name:     SessionCookieName,
+		Value:    hex.EncodeToString(data),
 		Path:     "/",
 		MaxAge:   60 * 60 * 24 * 7,
 		HttpOnly: true,

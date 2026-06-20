@@ -7,43 +7,58 @@ import (
 )
 
 type Handler struct {
-	svc *Service
+	service *Service
 }
 
-func NewHandler(svc *Service) *Handler {
-	return &Handler{svc: svc}
+func NewHandler(service *Service) *Handler {
+	return &Handler{
+		service: service,
+	}
 }
 
 func (h *Handler) Register(mux *http.ServeMux) {
-	mux.HandleFunc("/github/connect", h.connect)
-	mux.HandleFunc("/github/callback", h.callback)
+	mux.HandleFunc("/github/connect", h.Connect)
+	mux.HandleFunc("/github/callback", h.Callback)
 }
 
-func (h *Handler) connect(w http.ResponseWriter, r *http.Request) {
-	state, err := randomState()
+func (h *Handler) Connect(
+	w http.ResponseWriter,
+	r *http.Request,
+) {
+	state, err := RandomState()
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
 
-	setStateCookie(w, state)
+	SetStateCookie(w, state)
 
 	http.Redirect(
 		w,
 		r,
-		h.svc.InstallURL(state),
+		h.service.InstallURL(state),
 		http.StatusFound,
 	)
 }
 
-func (h *Handler) callback(w http.ResponseWriter, r *http.Request) {
-	cookie, err := r.Cookie(stateCookie)
-	if err != nil || cookie.Value != r.URL.Query().Get("state") {
+func (h *Handler) Callback(
+	w http.ResponseWriter,
+	r *http.Request,
+) {
+	cookie, err := r.Cookie(StateCookieName)
+	if err != nil {
+		http.Error(w, "missing state", http.StatusBadRequest)
+		return
+	}
+
+	state := r.URL.Query().Get("state")
+
+	if cookie.Value != state {
 		http.Error(w, "invalid state", http.StatusBadRequest)
 		return
 	}
 
-	clearStateCookie(w)
+	ClearStateCookie(w)
 
 	installationID := r.URL.Query().Get("installation_id")
 	if installationID == "" {
@@ -57,20 +72,23 @@ func (h *Handler) callback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	token, err := h.svc.ExchangeCode(code)
+	token, err := h.service.ExchangeCode(code)
 	if err != nil {
-		log.Println("exchange code:", err)
+		log.Println(err)
 		http.Error(w, "oauth failed", http.StatusBadGateway)
 		return
 	}
 
-	inst, err := h.svc.FindInstallation(token, installationID)
+	inst, err := h.service.FindInstallation(
+		token,
+		installationID,
+	)
 	if err != nil {
 		http.Redirect(w, r, "/?connected=1", http.StatusFound)
 		return
 	}
 
-	if err := saveSession(w, token, inst); err != nil {
+	if err := SaveSession(w, token, inst); err != nil {
 		http.Error(w, "session error", http.StatusInternalServerError)
 		return
 	}
@@ -78,5 +96,10 @@ func (h *Handler) callback(w http.ResponseWriter, r *http.Request) {
 	redirect := "/?connected=1&org=" +
 		url.QueryEscape(inst.Account.Login)
 
-	http.Redirect(w, r, redirect, http.StatusFound)
+	http.Redirect(
+		w,
+		r,
+		redirect,
+		http.StatusFound,
+	)
 }

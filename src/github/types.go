@@ -9,7 +9,7 @@ type Installation struct {
 	} `json:"account"`
 }
 
-type session struct {
+type Session struct {
 	Token        string        `json:"token"`
 	Installation *Installation `json:"installation"`
 }
