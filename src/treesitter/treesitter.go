@@ -2,7 +2,6 @@ package treesitter
 
 import (
 	"errors"
-	"fmt"
 	tree_sitter "github.com/tree-sitter/go-tree-sitter"
 	tree_sitter_go "github.com/tree-sitter/tree-sitter-go/bindings/go"
 	tree_sitter_javascript "github.com/tree-sitter/tree-sitter-javascript/bindings/go"
@@ -10,18 +9,9 @@ import (
 	"quisac/src/astparsers"
 )
 
-// PythonExtracted holds all extracted Python constructs
-type PythonExtracted struct {
-	Imports             []string
-	Functions           []string
-	FunctionCalls       []string
-	Classes             []string
-	ClassInstantiations []string
-}
-
 func getLanguage(ext string) (*tree_sitter.Language, error) {
 	switch ext {
-	case ".js", ".ts":
+	case ".js", ".jsx", ".ts", ".tsx":
 		return tree_sitter.NewLanguage(tree_sitter_javascript.Language()), nil
 	case ".py":
 		return tree_sitter.NewLanguage(tree_sitter_python.Language()), nil
@@ -32,32 +22,27 @@ func getLanguage(ext string) (*tree_sitter.Language, error) {
 	}
 }
 
-func ParseCode(code []byte, ext string) error {
+// ParseCode parses a file and returns the extracted symbols.
+// filePath is used as the node ID in the graph.
+func ParseCode(code []byte, ext string, filePath string) (*astparsers.Extracted, error) {
 	parser := tree_sitter.NewParser()
 	defer parser.Close()
 
 	lang, err := getLanguage(ext)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	parser.SetLanguage(lang)
 
 	tree := parser.Parse(code, nil)
 	defer tree.Close()
 
-	//root := tree.RootNode()
-	//fmt.Println(root.ToSexp())
 	astParser := astparsers.Get(ext)
 	if astParser == nil {
-		return errors.New("no AST parser for extension: " + ext)
+		return nil, errors.New("no AST parser for extension: " + ext)
 	}
 
-	extracted := astParser.Parse(tree.RootNode(), code)
-
-	fmt.Println("Imports:             ", extracted.Imports)
-	fmt.Println("Functions:           ", extracted.Functions)
-	fmt.Println("Classes:             ", extracted.Classes)
-	fmt.Println("Function Calls:      ", extracted.FunctionCalls)
-	fmt.Println("Class Instantiations:", extracted.ClassInstantiations)
-	return nil
+	// Pass filePath so extracted result knows which file it came from
+	extracted := astParser.Parse(tree.RootNode(), code, filePath)
+	return extracted, nil
 }
