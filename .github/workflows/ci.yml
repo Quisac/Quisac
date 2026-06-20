@@ -4,6 +4,9 @@ on:
   push:
     branches:
       - main
+  pull_request:
+    branches:
+      - main
 
 jobs:
   test:
@@ -23,7 +26,7 @@ jobs:
 
       - name: run backend tests
         run: |
-          if [ -d "tests/backend" ]; then go test ./tests/backend/...; else echo "no tests yet"; fi
+          if [ -d "tests" ]; then go test ./tests/...; else echo "no tests yet"; fi
 
       - name: run frontend tests
         run: |

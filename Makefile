@@ -4,10 +4,12 @@
 ## make test           — run all tests
 ## make test/frontend/x
 ## make test/backend/x
-.PHONY: dev test
+## make deploy         — push to main and deploy to Railway
+
+.PHONY: dev test deploy
 
 dev:
-	go run src/main.go
+	go run src/main.go --serve
 
 test:
 	@echo "── frontend ──"
@@ -20,3 +22,6 @@ test/frontend/%:
 
 test/backend/%:
 	go test ./tests/backend/ -run $*
+
+deploy:
+	git push origin main
