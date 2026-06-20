@@ -1,0 +1,7 @@
+.env
+./secrets
+secrets
+./env
+.*env
+*.bin
+/bin
