@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -10,36 +11,28 @@ import (
 	"github.com/joho/godotenv"
 )
 
-const defaultPort = "8000"
-
 func main() {
-	_ = godotenv.Load()
-
-	cfg, err := github.LoadConfig()
-	if err != nil {
-		log.Fatal(err)
+	if err := godotenv.Load(); err != nil {
+		log.Println("no .env file, using environment")
 	}
 
-	port := os.Getenv("PORT")
-	if port == "" {
-		port = defaultPort
+	cfg := github.ConfigFromEnv()
+	if err := cfg.Validate(); err != nil {
+		log.Fatalf("config: %v", err)
 	}
 
 	mux := http.NewServeMux()
+	github.Register(mux, cfg)
+	mux.Handle("/", http.FileServer(http.Dir("html")))
 
-	svc := github.NewService(cfg)
-	handler := github.NewHandler(svc)
+	addr := "0.0.0.0:" + port()
+	fmt.Printf("serving → http://localhost:%s\n", addr)
+	log.Fatal(http.ListenAndServe(addr, mux))
+}
 
-	handler.Register(mux)
-
-	fs := http.FileServer(http.Dir("html"))
-	mux.Handle("/", fs)
-
-	addr := ":" + port
-
-	log.Printf("listening on %s", addr)
-
-	if err := http.ListenAndServe(addr, mux); err != nil {
-		log.Fatal(err)
+func port() string {
+	if p := os.Getenv("PORT"); p != "" {
+		return p
 	}
+	return "8000"
 }

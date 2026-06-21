@@ -20,71 +20,75 @@ document.querySelectorAll('.sidebar-item').forEach(item => {
   });
 });
 
-// ── Session cookie helpers ─────────────────────────────────────────────────
-// The Go server stores session as hex-encoded JSON in "quisac_gh".
-// We read it client-side to get the org name on page refresh.
-function getSessionOrg() {
+// ── Session cookie helpers ────────────────────────────────────────────────────
+function getSession() {
   const match = document.cookie.split(';').find(c => c.trim().startsWith('quisac_gh='));
-  if (!match) return '';
+  if (!match) return null;
   try {
     const hex = match.split('=')[1].trim();
-    // hex → bytes → string
     const str = hex.match(/.{1,2}/g).map(b => String.fromCharCode(parseInt(b, 16))).join('');
-    const session = JSON.parse(str);
-    return session?.installation?.account?.login || '';
+    return JSON.parse(str);
   } catch {
-    return '';
+    return null;
   }
 }
 
-// ── OAuth callback handling ────────────────────────────────────────────────
+// ── OAuth callback handling ───────────────────────────────────────────────────
 const params = new URLSearchParams(window.location.search);
 
 if (params.get('connected') === '1') {
-  // Fresh OAuth redirect — org name is in the URL
-  const org = params.get('org') || '';
+  const org  = params.get('org')  || '';
+  const repo = params.get('repo') || '';
   showDashboard();
-  applyConnectedState(org);
+  applyConnectedState(org, repo);
   history.replaceState({}, '', '/');
-} else if (getSessionOrg()) {
-  // Already connected from a previous session — read org from cookie
-  showDashboard();
-  applyConnectedState(getSessionOrg());
+} else {
+  const sess = getSession();
+  if (sess?.installation?.account?.login) {
+    showDashboard();
+    applyConnectedState(sess.installation.account.login, sess.selected_repo || '');
+  }
 }
 
-function applyConnectedState(org) {
-  // 1. Topbar: replace "Connect repo" with org pill
+function applyConnectedState(org, repo) {
+  // 1. Topbar: swap "Connect repo" for org pill
   const connectBtn = document.getElementById('connect-btn');
   if (connectBtn) connectBtn.style.display = 'none';
 
-  const orgPill = document.getElementById('org-pill');
+  const orgPill   = document.getElementById('org-pill');
   const orgNameEl = document.getElementById('org-name');
   if (orgPill && orgNameEl) {
     orgNameEl.textContent = org || 'connected';
     orgPill.style.display = 'flex';
   }
 
-  // 2. Sidebar: show org block above nav items
-  const sidebarOrg = document.getElementById('sidebar-org');
+  // 2. Sidebar org block
+  const sidebarOrg     = document.getElementById('sidebar-org');
   const sidebarOrgName = document.getElementById('sidebar-org-name');
   if (sidebarOrg && sidebarOrgName) {
     sidebarOrgName.textContent = org || 'connected';
     sidebarOrg.style.display = 'block';
   }
 
-  // 3. Banner below dashboard header
-  const banner = document.getElementById('repo-banner');
+  // 3. Banner
+  const banner     = document.getElementById('repo-banner');
   const bannerText = document.getElementById('banner-text');
   if (banner && bannerText) {
-    bannerText.textContent = org
-      ? `${org} connected — Quisac is indexing your codebase`
-      : 'GitHub connected — Quisac is indexing your codebase';
+    bannerText.textContent = repo
+      ? `${repo} connected — Quisac is indexing your codebase`
+      : org
+        ? `${org} connected — Quisac is indexing your codebase`
+        : 'GitHub connected — Quisac is indexing your codebase';
     banner.style.display = 'flex';
   }
 
   // 4. Graph card meta
   const graphMeta = document.getElementById('graph-meta');
-  if (graphMeta && org) {
-    graphMeta.textContent = `${org} · indexing…`;
+  if (graphMeta) {
+    graphMeta.textContent = repo
+      ? `${repo} · indexing…`
+      : org
+        ? `${org} · indexing…`
+        : graphMeta.textContent;
   }
 }
