@@ -1,0 +1,112 @@
+{{define "body"}}
+<div class="flow-card" style="max-width:640px;">
+
+  <h1 style="font-size:20px;font-weight:400;margin-bottom:.35rem;">Import Git Repository</h1>
+  <p style="font-size:14px;color:var(--sub);margin-bottom:1.75rem;">
+    Pick a repository to connect to Quisac.
+  </p>
+
+  <!-- account row -->
+  <div style="display:flex;gap:10px;margin-bottom:1rem;">
+    <div style="
+      display:flex;align-items:center;gap:8px;
+      border:1px solid var(--border2);border-radius:6px;
+      padding:8px 12px;background:var(--surface);flex:0 0 auto;
+    ">
+      {{template "github-mark" (dict "Size" 16 "Fill" "var(--text)")}}
+      <span style="font-size:14px;font-weight:500;color:var(--text);">{{.OrgName}}</span>
+      <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="var(--muted)" stroke-width="1.5">
+        <path d="M2 4l4 4 4-4"/>
+      </svg>
+    </div>
+
+    <!-- search -->
+    <div style="position:relative;flex:1;">
+      <svg style="position:absolute;left:10px;top:50%;transform:translateY(-50%);width:15px;height:15px;color:var(--muted);pointer-events:none;" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5">
+        <circle cx="9" cy="9" r="5.5"/><line x1="13.5" y1="13.5" x2="17" y2="17"/>
+      </svg>
+      <input id="search" type="text" placeholder="Search…" autocomplete="off" style="
+        width:100%;height:38px;padding:0 12px 0 34px;
+        border:1px solid var(--border2);border-radius:6px;
+        font-family:'Google Sans',sans-serif;font-size:14px;color:var(--text);
+        background:var(--surface);outline:none;transition:border-color .15s;
+      ">
+    </div>
+  </div>
+
+  <!-- repo list -->
+  <div style="border:1px solid var(--border);border-radius:8px;overflow:hidden;">
+    {{if .Repos}}
+      {{range .Repos}}
+      <div class="repo-row" data-name="{{.Name}}" style="
+        display:flex;align-items:center;gap:12px;
+        padding:13px 16px;border-bottom:1px solid var(--border);
+        transition:background .1s;
+      ">
+        <!-- repo icon -->
+        <svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="var(--muted)" stroke-width="1.5" style="flex-shrink:0;">
+          <path d="M4 3h9l3 3v11a1 1 0 01-1 1H4a1 1 0 01-1-1V4a1 1 0 011-1z"/>
+          <polyline points="13 3 13 7 17 7"/>
+        </svg>
+
+        <!-- name + meta -->
+        <div style="flex:1;min-width:0;">
+          <div style="font-size:14px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
+            {{.Name}}
+            {{if .Private}}
+              <span style="font-size:11px;font-weight:400;color:var(--muted);border:1px solid var(--border2);border-radius:100px;padding:1px 7px;margin-left:6px;">Private</span>
+            {{end}}
+          </div>
+          {{if .Language}}
+          <div style="font-size:12px;color:var(--muted);margin-top:2px;display:flex;align-items:center;gap:5px;">
+            <span style="width:8px;height:8px;border-radius:50%;background:var(--blue);display:inline-block;"></span>
+            {{.Language}}
+          </div>
+          {{end}}
+        </div>
+
+        <!-- import button -->
+        <form method="POST" action="/github/import/select" style="margin:0;flex-shrink:0;">
+          <input type="hidden" name="repo"     value="{{.FullName}}">
+          <input type="hidden" name="repo_id"  value="{{.ID}}">
+          <input type="hidden" name="private"  value="{{.Private}}">
+          <input type="hidden" name="language" value="{{.Language}}">
+          <button type="submit" class="import-btn" style="
+            font-family:'Google Sans',sans-serif;font-size:13px;font-weight:500;
+            color:var(--surface);background:var(--blue);
+            border:none;padding:7px 18px;border-radius:4px;
+            cursor:pointer;transition:background .15s;white-space:nowrap;
+          ">Import</button>
+        </form>
+      </div>
+      {{end}}
+    {{else}}
+      <div style="padding:3rem;text-align:center;color:var(--muted);font-size:14px;">
+        No repositories found.
+      </div>
+    {{end}}
+  </div>
+
+  <p style="font-size:12px;color:var(--muted);margin-top:1rem;">
+    Don't see your repo?
+    <a href="/github/connect" style="color:var(--blue);text-decoration:none;">Configure GitHub App →</a>
+  </p>
+</div>
+
+<script>
+  const search = document.getElementById('search');
+  search.addEventListener('input', () => {
+    const q = search.value.toLowerCase();
+    document.querySelectorAll('.repo-row').forEach(el => {
+      el.style.display = el.dataset.name.toLowerCase().includes(q) ? '' : 'none';
+    });
+  });
+  document.querySelectorAll('.import-btn').forEach(btn => {
+    btn.closest('form').addEventListener('submit', () => {
+      btn.textContent = 'Importing…';
+      btn.style.opacity = '.6';
+      btn.style.pointerEvents = 'none';
+    });
+  });
+</script>
+{{end}}

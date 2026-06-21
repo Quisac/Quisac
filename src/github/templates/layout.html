@@ -1,0 +1,58 @@
+{{define "layout"}}<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{{.Title}} · Quisac</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Google+Sans:wght@300;400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/index.css">
+  <style>
+    .flow-page {
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+    .flow-topbar {
+      height: 56px;
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      padding: 0 1.5rem;
+    }
+    .flow-logo {
+      font-size: 18px;
+      font-weight: 500;
+      color: var(--text);
+      text-decoration: none;
+    }
+    .flow-logo span { color: var(--blue); }
+    .flow-body {
+      flex: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 3rem 1.5rem;
+    }
+    .flow-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 2.5rem;
+      width: 100%;
+    }
+  </style>
+</head>
+<body>
+<div class="flow-page">
+  <nav class="flow-topbar">
+    <a class="flow-logo" href="/">Quis<span>ac</span></a>
+  </nav>
+  <div class="flow-body">
+    {{template "body" .}}
+  </div>
+</div>
+</body>
+</html>
+{{end}}
