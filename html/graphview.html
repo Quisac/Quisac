@@ -1,0 +1,865 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Codebase Knowledge Graph</title>
+    <style>
+      * {
+        box-sizing: border-box;
+        margin: 0;
+        padding: 0;
+      }
+      :root {
+        --bg: #0f1117;
+        --surface: #181c27;
+        --surface2: #1e2333;
+        --border: #2a3050;
+        --text: #e2e8f0;
+        --muted: #64748b;
+        --accent: #6366f1;
+        --file: #3b82f6;
+        --class: #f97316;
+        --func: #22c55e;
+        --method: #eab308;
+        --module: #8b5cf6;
+        --variable: #64748b;
+      }
+      body {
+        background: var(--bg);
+        color: var(--text);
+        font-family: "Inter", system-ui, sans-serif;
+        height: 100vh;
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+      }
+
+      #topbar {
+        display: flex;
+        align-items: center;
+        gap: 16px;
+        padding: 10px 16px;
+        background: var(--surface);
+        border-bottom: 1px solid var(--border);
+        flex-shrink: 0;
+        flex-wrap: wrap;
+      }
+      #topbar h1 {
+        font-size: 14px;
+        font-weight: 600;
+        letter-spacing: 0.04em;
+        color: var(--text);
+        white-space: nowrap;
+      }
+      #topbar h1 span {
+        color: var(--accent);
+      }
+
+      .filters {
+        display: flex;
+        gap: 6px;
+        flex-wrap: wrap;
+      }
+      .fbtn {
+        font-size: 11px;
+        padding: 3px 10px;
+        border-radius: 20px;
+        border: 1px solid var(--border);
+        background: transparent;
+        color: var(--muted);
+        cursor: pointer;
+        transition: all 0.15s;
+        white-space: nowrap;
+      }
+      .fbtn:hover {
+        border-color: var(--accent);
+        color: var(--text);
+      }
+      .fbtn.on {
+        color: #fff;
+        border-color: transparent;
+      }
+      .fbtn[data-t="all"].on {
+        background: var(--accent);
+      }
+      .fbtn[data-t="File"].on {
+        background: var(--file);
+      }
+      .fbtn[data-t="Class"].on {
+        background: var(--class);
+      }
+      .fbtn[data-t="Function"].on {
+        background: var(--func);
+      }
+      .fbtn[data-t="Method"].on {
+        background: var(--method);
+        color: #000;
+      }
+      .fbtn[data-t="Module"].on {
+        background: var(--module);
+      }
+      .fbtn[data-t="Variable"].on {
+        background: var(--variable);
+      }
+
+      #stats {
+        font-size: 11px;
+        color: var(--muted);
+        margin-left: auto;
+        white-space: nowrap;
+      }
+
+      #main {
+        display: flex;
+        flex: 1;
+        overflow: hidden;
+      }
+
+      #canvas-wrap {
+        flex: 1;
+        position: relative;
+        overflow: hidden;
+      }
+      canvas {
+        display: block;
+        width: 100%;
+        height: 100%;
+        cursor: grab;
+      }
+      canvas.pan {
+        cursor: grabbing;
+      }
+
+      #sidebar {
+        width: 260px;
+        background: var(--surface);
+        border-left: 1px solid var(--border);
+        padding: 16px;
+        overflow-y: auto;
+        font-size: 12px;
+        flex-shrink: 0;
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+      }
+      #sidebar h2 {
+        font-size: 11px;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: var(--muted);
+      }
+      #node-info {
+        display: none;
+      }
+      #node-info .ni-type {
+        display: inline-block;
+        padding: 2px 8px;
+        border-radius: 12px;
+        font-size: 10px;
+        font-weight: 600;
+        margin-bottom: 8px;
+      }
+      #node-info .ni-name {
+        font-size: 14px;
+        font-weight: 600;
+        margin-bottom: 4px;
+        word-break: break-all;
+      }
+      #node-info .ni-id {
+        color: var(--muted);
+        font-size: 10px;
+        word-break: break-all;
+        margin-bottom: 12px;
+      }
+      #node-info .ni-section {
+        font-size: 10px;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        color: var(--muted);
+        margin-bottom: 4px;
+      }
+      #node-info .ni-list {
+        display: flex;
+        flex-direction: column;
+        gap: 3px;
+        margin-bottom: 10px;
+      }
+      #node-info .ni-item {
+        background: var(--surface2);
+        border-radius: 4px;
+        padding: 4px 8px;
+        color: var(--text);
+        font-size: 11px;
+        cursor: pointer;
+        transition: background 0.1s;
+        word-break: break-all;
+      }
+      #node-info .ni-item:hover {
+        background: var(--border);
+      }
+      #node-info .ni-edge-type {
+        font-size: 9px;
+        color: var(--muted);
+        display: block;
+      }
+
+      #legend {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+      }
+      .leg-row {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-size: 11px;
+        color: var(--muted);
+      }
+      .leg-dot {
+        width: 10px;
+        height: 10px;
+        border-radius: 50%;
+        flex-shrink: 0;
+      }
+      #edge-legend {
+        display: flex;
+        flex-direction: column;
+        gap: 5px;
+        margin-top: 4px;
+      }
+      .eleg {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-size: 11px;
+        color: var(--muted);
+      }
+      .eleg-line {
+        width: 24px;
+        height: 2px;
+        border-radius: 1px;
+        flex-shrink: 0;
+      }
+
+      #hint {
+        position: absolute;
+        bottom: 12px;
+        left: 12px;
+        font-size: 10px;
+        color: var(--muted);
+        background: var(--surface);
+        padding: 4px 10px;
+        border-radius: 20px;
+        border: 1px solid var(--border);
+        pointer-events: none;
+      }
+      #tooltip {
+        position: absolute;
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        padding: 6px 10px;
+        font-size: 11px;
+        pointer-events: none;
+        display: none;
+        z-index: 20;
+        max-width: 200px;
+        word-break: break-all;
+      }
+
+      #search-wrap {
+        display: flex;
+        gap: 6px;
+        align-items: center;
+      }
+      #search {
+        background: var(--surface2);
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        padding: 5px 10px;
+        font-size: 12px;
+        color: var(--text);
+        width: 100%;
+        outline: none;
+      }
+      #search:focus {
+        border-color: var(--accent);
+      }
+      #search::placeholder {
+        color: var(--muted);
+      }
+
+      .placeholder-msg {
+        color: var(--muted);
+        font-size: 11px;
+        text-align: center;
+        padding: 16px 0;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="topbar">
+      <h1>Code<span>Graph</span></h1>
+      <div class="filters">
+        <button class="fbtn on" data-t="all">All</button>
+        <button class="fbtn" data-t="File">Files</button>
+        <button class="fbtn" data-t="Class">Classes</button>
+        <button class="fbtn" data-t="Function">Functions</button>
+        <button class="fbtn" data-t="Method">Methods</button>
+        <button class="fbtn" data-t="Module">Modules</button>
+        <button class="fbtn" data-t="Variable">Variables</button>
+      </div>
+      <div id="stats">0 nodes · 0 edges</div>
+    </div>
+
+    <div id="main">
+      <div id="canvas-wrap">
+        <canvas id="c"></canvas>
+        <div id="hint">
+          scroll to zoom · drag to pan · click node to inspect
+        </div>
+        <div id="tooltip"></div>
+      </div>
+
+      <div id="sidebar">
+        <div>
+          <h2>Search</h2>
+          <div id="search-wrap">
+            <input
+              id="search"
+              placeholder="Filter by name..."
+              autocomplete="off"
+            />
+          </div>
+        </div>
+
+        <div id="node-info">
+          <h2>Selected Node</h2>
+          <div id="ni-body"></div>
+        </div>
+        <div id="no-selection">
+          <h2>Legend — Nodes</h2>
+          <div id="legend">
+            <div class="leg-row">
+              <div class="leg-dot" style="background: var(--file)"></div>
+              File
+            </div>
+            <div class="leg-row">
+              <div class="leg-dot" style="background: var(--class)"></div>
+              Class
+            </div>
+            <div class="leg-row">
+              <div class="leg-dot" style="background: var(--func)"></div>
+              Function
+            </div>
+            <div class="leg-row">
+              <div class="leg-dot" style="background: var(--method)"></div>
+              Method
+            </div>
+            <div class="leg-row">
+              <div class="leg-dot" style="background: var(--module)"></div>
+              Module
+            </div>
+            <div class="leg-row">
+              <div class="leg-dot" style="background: var(--variable)"></div>
+              Variable
+            </div>
+          </div>
+          <br />
+          <h2>Legend — Edges</h2>
+          <div id="edge-legend">
+            <div class="eleg">
+              <div class="eleg-line" style="background: #3b82f6"></div>
+              Imports
+            </div>
+            <div class="eleg">
+              <div
+                class="eleg-line"
+                style="
+                  background: #64748b;
+                  border-top: 2px dashed #64748b;
+                  height: 0;
+                "
+              ></div>
+              Contains
+            </div>
+            <div class="eleg">
+              <div class="eleg-line" style="background: #22c55e"></div>
+              Calls
+            </div>
+            <div class="eleg">
+              <div class="eleg-line" style="background: #f97316"></div>
+              Inherits
+            </div>
+            <div class="eleg">
+              <div class="eleg-line" style="background: #eab308"></div>
+              Instantiates
+            </div>
+            <div class="eleg">
+              <div class="eleg-line" style="background: #ec4899"></div>
+              Decorates
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <script>
+      let GRAPH_JSON = null;
+
+      async function loadGraph() {
+        const filename = "graph.json";
+        try {
+          const res = await fetch(filename);
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          GRAPH_JSON = await res.json();
+        } catch (err) {
+          document.getElementById("canvas-wrap").innerHTML =
+            `<div style="display:flex;align-items:center;justify-content:center;height:100%;flex-direction:column;gap:12px;color:var(--muted)">
+        <div style="font-size:32px">⚠</div>
+        <div style="font-size:14px;font-weight:500;color:var(--text)">Could not load graph.json</div>
+        <div style="font-size:12px">${err.message}</div>
+        <div style="font-size:11px;color:var(--muted)">Place graph.json in the same directory as this HTML file<br>then serve with: <code style="background:var(--surface2);padding:2px 6px;border-radius:4px">python3 -m http.server 8080</code></div>
+      </div>`;
+          return;
+        }
+        init();
+      }
+
+      function init() {
+        const NODE_COLOR = {
+          File: "#3b82f6",
+          Class: "#f97316",
+          Function: "#22c55e",
+          Method: "#eab308",
+          Module: "#8b5cf6",
+          Variable: "#475569",
+        };
+        const NODE_R = {
+          File: 22,
+          Class: 18,
+          Function: 16,
+          Method: 14,
+          Module: 12,
+          Variable: 10,
+        };
+        const EDGE_COLOR = {
+          Imports: "#3b82f6",
+          Contains: "#334155",
+          Calls: "#22c55e",
+          Inherits: "#f97316",
+          Instantiates: "#eab308",
+          Decorates: "#ec4899",
+        };
+        const EDGE_DASH = { Contains: true };
+
+        const canvas = document.getElementById("c");
+        const ctx = canvas.getContext("2d");
+        const wrap = document.getElementById("canvas-wrap");
+        const tooltip = document.getElementById("tooltip");
+        const statsEl = document.getElementById("stats");
+        const searchEl = document.getElementById("search");
+
+        let W, H, dpr;
+        function resize() {
+          dpr = window.devicePixelRatio || 1;
+          W = wrap.clientWidth;
+          H = wrap.clientHeight;
+          canvas.width = W * dpr;
+          canvas.height = H * dpr;
+          ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        }
+        resize();
+        window.addEventListener("resize", resize);
+
+        const allNodes = Object.values(GRAPH_JSON.nodes);
+        const allEdges = GRAPH_JSON.edges;
+
+        let filterType = "all";
+        let searchQ = "";
+        let focused = null;
+        let zoom = 1,
+          panX = 0,
+          panY = 0;
+        let dragNode = null,
+          panStart = null,
+          dragMoved = false;
+
+        function shortName(n) {
+          return n.name.length > 18 ? n.name.slice(0, 17) + "…" : n.name;
+        }
+
+        function visibleNodes() {
+          let ns =
+            filterType === "all"
+              ? allNodes
+              : allNodes.filter((n) => n.type === filterType);
+          if (searchQ)
+            ns = ns.filter(
+              (n) =>
+                n.name.toLowerCase().includes(searchQ) ||
+                n.id.toLowerCase().includes(searchQ),
+            );
+          return ns;
+        }
+        function visibleSet() {
+          return new Set(visibleNodes().map((n) => n.id));
+        }
+
+        function buildAdj() {
+          const adj = {};
+          allNodes.forEach((n) => {
+            adj[n.id] = { out: [], in: [] };
+          });
+          allEdges.forEach((e) => {
+            if (adj[e.from]) adj[e.from].out.push(e);
+            if (adj[e.to]) adj[e.to].in.push(e);
+          });
+          return adj;
+        }
+        let adj = buildAdj();
+
+        function focusNeighbors() {
+          if (!focused) return null;
+          const s = new Set([focused]);
+          (adj[focused]?.out || []).forEach((e) => s.add(e.to));
+          (adj[focused]?.in || []).forEach((e) => s.add(e.from));
+          return s;
+        }
+
+        function initLayout() {
+          const cx = 0,
+            cy = 0;
+          const byType = {};
+          allNodes.forEach((n) => {
+            (byType[n.type] = byType[n.type] || []).push(n);
+          });
+          const types = Object.keys(byType);
+          types.forEach((t, ti) => {
+            const a0 = (ti / types.length) * Math.PI * 2;
+            const gr = 300;
+            const gcx = cx + Math.cos(a0) * gr * 0.5;
+            const gcy = cy + Math.sin(a0) * gr * 0.5;
+            byType[t].forEach((n, i) => {
+              const a2 = (i / byType[t].length) * Math.PI * 2;
+              const r2 = gr * 0.35;
+              n.x = gcx + Math.cos(a2) * r2 + (Math.random() - 0.5) * 30;
+              n.y = gcy + Math.sin(a2) * r2 + (Math.random() - 0.5) * 30;
+              n.vx = 0;
+              n.vy = 0;
+            });
+          });
+        }
+        initLayout();
+
+        let simRunning = true;
+        function tick() {
+          const vset = visibleSet();
+          const ns = allNodes.filter((n) => vset.has(n.id));
+          const REP = 5000,
+            SPRING = 0.005,
+            IDEAL_CONTAINS = 70,
+            IDEAL_OTHER = 180,
+            DAMP = 0.82;
+          ns.forEach((a) => {
+            ns.forEach((b) => {
+              if (a === b) return;
+              const dx = a.x - b.x,
+                dy = a.y - b.y,
+                d2 = dx * dx + dy * dy || 1;
+              const f = REP / d2,
+                d = Math.sqrt(d2);
+              a.vx += (f * dx) / d;
+              a.vy += (f * dy) / d;
+            });
+          });
+          allEdges.forEach((e) => {
+            const a = GRAPH_JSON.nodes[e.from],
+              b = GRAPH_JSON.nodes[e.to];
+            if (!a || !b || !vset.has(a.id) || !vset.has(b.id)) return;
+            const dx = b.x - a.x,
+              dy = b.y - a.y,
+              d = Math.sqrt(dx * dx + dy * dy) || 1;
+            const ideal = e.type === "Contains" ? IDEAL_CONTAINS : IDEAL_OTHER;
+            const f = (d - ideal) * SPRING;
+            const fx = (f * dx) / d,
+              fy = (f * dy) / d;
+            a.vx += fx;
+            a.vy += fy;
+            b.vx -= fx;
+            b.vy -= fy;
+          });
+          ns.forEach((n) => {
+            if (dragNode && dragNode === n) return;
+            n.vx *= DAMP;
+            n.vy *= DAMP;
+            n.x += n.vx;
+            n.y += n.vy;
+          });
+        }
+
+        function toScreen(x, y) {
+          return {
+            sx: (x + panX) * zoom + W / 2,
+            sy: (y + panY) * zoom + H / 2,
+          };
+        }
+        function toWorld(sx, sy) {
+          return {
+            x: (sx - W / 2) / zoom - panX,
+            y: (sy - H / 2) / zoom - panY,
+          };
+        }
+
+        function drawArrow(x1, y1, x2, y2, r2) {
+          const dx = x2 - x1,
+            dy = y2 - y1,
+            d = Math.sqrt(dx * dx + dy * dy) || 1;
+          const ux = dx / d,
+            uy = dy / d;
+          const ex = x2 - ux * r2,
+            ey = y2 - uy * r2;
+          const as = 6 / zoom;
+          ctx.beginPath();
+          ctx.moveTo(ex, ey);
+          ctx.lineTo(ex - as * (ux - uy * 0.4), ey - as * (uy + ux * 0.4));
+          ctx.lineTo(ex - as * (ux + uy * 0.4), ey - as * (uy - ux * 0.4));
+          ctx.closePath();
+          ctx.fill();
+        }
+
+        function draw() {
+          ctx.clearRect(0, 0, W, H);
+          const vset = visibleSet();
+          const focus = focusNeighbors();
+
+          ctx.save();
+          ctx.translate(W / 2, H / 2);
+          ctx.scale(zoom, zoom);
+          ctx.translate(panX, panY);
+
+          allEdges.forEach((e) => {
+            const a = GRAPH_JSON.nodes[e.from],
+              b = GRAPH_JSON.nodes[e.to];
+            if (!a || !b || !vset.has(a.id) || !vset.has(b.id)) return;
+            const faded = focus && !focus.has(a.id) && !focus.has(b.id);
+            ctx.globalAlpha = faded ? 0.04 : 0.5;
+            ctx.strokeStyle = EDGE_COLOR[e.type] || "#555";
+            ctx.lineWidth = (e.type === "Contains" ? 1 : 1.5) / zoom;
+            ctx.setLineDash(EDGE_DASH[e.type] ? [5 / zoom, 3 / zoom] : []);
+            const mx = (a.x + b.x) / 2 + (b.y - a.y) * 0.12,
+              my = (a.y + b.y) / 2 + (a.x - b.x) * 0.12;
+            ctx.beginPath();
+            ctx.moveTo(a.x, a.y);
+            ctx.quadraticCurveTo(mx, my, b.x, b.y);
+            ctx.stroke();
+            ctx.setLineDash([]);
+            if (!faded && e.type !== "Contains") {
+              const r = NODE_R[b.type] || 12;
+              ctx.fillStyle = EDGE_COLOR[e.type] || "#555";
+              const t = 0.75,
+                ipx = mx + (b.x - mx) * t,
+                ipy = my + (b.y - my) * t;
+              drawArrow(ipx, ipy, b.x, b.y, r);
+            }
+          });
+
+          allNodes.forEach((n) => {
+            if (!vset.has(n.id)) return;
+            const r = NODE_R[n.type] || 12;
+            const faded = focus && !focus.has(n.id);
+            ctx.globalAlpha = faded ? 0.07 : 1;
+            ctx.fillStyle = NODE_COLOR[n.type] || "#555";
+            ctx.beginPath();
+            ctx.arc(n.x, n.y, r, 0, Math.PI * 2);
+            ctx.fill();
+            if (focused === n.id) {
+              ctx.strokeStyle = "#fff";
+              ctx.lineWidth = 2 / zoom;
+              ctx.beginPath();
+              ctx.arc(n.x, n.y, r + 2, 0, Math.PI * 2);
+              ctx.stroke();
+            }
+            ctx.globalAlpha = faded ? 0.07 : 0.95;
+            const fs = Math.max(8, 10);
+            ctx.font = `${(fs / zoom) * zoom}px Inter,system-ui,sans-serif`;
+            ctx.fillStyle = "#fff";
+            ctx.textAlign = "center";
+            ctx.textBaseline = "middle";
+            ctx.fillText(shortName(n), n.x, n.y);
+          });
+
+          ctx.globalAlpha = 1;
+          ctx.restore();
+        }
+
+        function loop() {
+          if (simRunning) tick();
+          draw();
+          requestAnimationFrame(loop);
+        }
+        loop();
+
+        function hitTest(sx, sy) {
+          const { x, y } = toWorld(sx, sy);
+          const vset = visibleSet();
+          let best = null,
+            bd = Infinity;
+          allNodes.forEach((n) => {
+            if (!vset.has(n.id)) return;
+            const r = (NODE_R[n.type] || 12) + 6;
+            const d = Math.hypot(n.x - x, n.y - y);
+            if (d < r && d < bd) {
+              bd = d;
+              best = n;
+            }
+          });
+          return best;
+        }
+
+        function showSidebar(n) {
+          if (!n) {
+            document.getElementById("node-info").style.display = "none";
+            document.getElementById("no-selection").style.display = "";
+            return;
+          }
+          document.getElementById("no-selection").style.display = "none";
+          const ni = document.getElementById("node-info");
+          ni.style.display = "";
+          const col = NODE_COLOR[n.type] || "#555";
+          const outs = adj[n.id]?.out || [];
+          const ins = adj[n.id]?.in || [];
+          document.getElementById("ni-body").innerHTML = `
+    <div class="ni-type" style="background:${col};color:#fff">${n.type}</div>
+    <div class="ni-name">${n.name}</div>
+    <div class="ni-id">${n.id}</div>
+    ${outs.length ? `<div class="ni-section">Outgoing (${outs.length})</div><div class="ni-list">${outs.map((e) => `<div class="ni-item" data-id="${e.to}"><span class="ni-edge-type">${e.type}</span>${GRAPH_JSON.nodes[e.to]?.name || e.to}</div>`).join("")}</div>` : ""}
+    ${ins.length ? `<div class="ni-section">Incoming (${ins.length})</div><div class="ni-list">${ins.map((e) => `<div class="ni-item" data-id="${e.from}"><span class="ni-edge-type">${e.type}</span>${GRAPH_JSON.nodes[e.from]?.name || e.from}</div>`).join("")}</div>` : ""}
+  `;
+          ni.querySelectorAll(".ni-item").forEach((el) => {
+            el.addEventListener("click", () => {
+              const target = GRAPH_JSON.nodes[el.dataset.id];
+              if (target) {
+                focused = target.id;
+                showSidebar(target);
+                centerOn(target);
+              }
+            });
+          });
+        }
+
+        function centerOn(n) {
+          panX = -n.x + (W / 2 - W / 2) / zoom;
+          panY = -n.y + (H / 2 - H / 2) / zoom;
+        }
+
+        canvas.addEventListener("mousemove", (e) => {
+          const r = canvas.getBoundingClientRect();
+          const sx = e.clientX - r.left,
+            sy = e.clientY - r.top;
+          if (panStart) {
+            panX += (sx - panStart.sx) / zoom;
+            panY += (sy - panStart.sy) / zoom;
+            panStart = { sx, sy };
+            dragMoved = true;
+            return;
+          }
+          if (dragNode) {
+            const { x, y } = toWorld(sx, sy);
+            dragNode.x = x;
+            dragNode.y = y;
+            dragNode.vx = 0;
+            dragNode.vy = 0;
+            dragMoved = true;
+            return;
+          }
+          const hit = hitTest(sx, sy);
+          if (hit) {
+            tooltip.style.display = "block";
+            tooltip.style.left = sx + 14 + "px";
+            tooltip.style.top = sy - 10 + "px";
+            tooltip.textContent = `[${hit.type}] ${hit.name}`;
+            canvas.style.cursor = "pointer";
+          } else {
+            tooltip.style.display = "none";
+            canvas.style.cursor = "grab";
+          }
+        });
+
+        canvas.addEventListener("mousedown", (e) => {
+          dragMoved = false;
+          const r = canvas.getBoundingClientRect();
+          const sx = e.clientX - r.left,
+            sy = e.clientY - r.top;
+          const hit = hitTest(sx, sy);
+          if (hit) {
+            dragNode = hit;
+          } else {
+            panStart = { sx, sy };
+            canvas.classList.add("pan");
+          }
+        });
+
+        canvas.addEventListener("mouseup", (e) => {
+          if (dragNode && !dragMoved) {
+            focused = focused === dragNode.id ? null : dragNode.id;
+            showSidebar(GRAPH_JSON.nodes[focused] || null);
+          }
+          if (!dragNode && !dragMoved) {
+            focused = null;
+            showSidebar(null);
+          }
+          dragNode = null;
+          panStart = null;
+          canvas.classList.remove("pan");
+        });
+
+        canvas.addEventListener(
+          "wheel",
+          (e) => {
+            e.preventDefault();
+            const r = canvas.getBoundingClientRect();
+            const sx = e.clientX - r.left,
+              sy = e.clientY - r.top;
+            const wBefore = toWorld(sx, sy);
+            zoom *= e.deltaY < 0 ? 1.12 : 0.89;
+            zoom = Math.max(0.1, Math.min(6, zoom));
+            const wAfter = toWorld(sx, sy);
+            panX += wAfter.x - wBefore.x;
+            panY += wAfter.y - wBefore.y;
+          },
+          { passive: false },
+        );
+
+        document.querySelectorAll(".fbtn").forEach((btn) => {
+          btn.addEventListener("click", () => {
+            document
+              .querySelectorAll(".fbtn")
+              .forEach((b) => b.classList.remove("on"));
+            btn.classList.add("on");
+            filterType = btn.dataset.t;
+            focused = null;
+            showSidebar(null);
+            const vn = visibleNodes();
+            statsEl.textContent = `${vn.length} nodes · ${allEdges.length} edges`;
+          });
+        });
+
+        searchEl.addEventListener("input", (e) => {
+          searchQ = e.target.value.trim().toLowerCase();
+          focused = null;
+          showSidebar(null);
+          const vn = visibleNodes();
+          statsEl.textContent = `${vn.length} nodes · ${allEdges.length} edges`;
+        });
+
+        statsEl.textContent = `${allNodes.length} nodes · ${allEdges.length} edges`;
+      } // end init()
+
+      loadGraph();
+    </script>
+  </body>
+</html>

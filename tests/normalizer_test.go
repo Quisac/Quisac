@@ -1,4 +1,4 @@
-package normalizer_test
+package tests
 
 import (
 	"testing"

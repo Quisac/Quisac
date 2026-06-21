@@ -7,3 +7,7 @@ make test/frontend/main
 make test/backend/main
 make deploy
 ```
+
+```
+    go run src/main.go --dir ../dir
+```
