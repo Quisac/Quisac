@@ -135,24 +135,32 @@ func exchangeCode(ctx context.Context, cfg Config, code string) (string, error) 
 	}
 	defer resp.Body.Close()
 
+	// Read the full body so we can log it on error without a second read.
+	respBody, err := io.ReadAll(io.LimitReader(resp.Body, 4<<10))
+	if err != nil {
+		return "", fmt.Errorf("github: read token response: %w", err)
+	}
+
 	if resp.StatusCode != http.StatusOK {
-		snippet, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<10))
-		return "", fmt.Errorf("github: token exchange: %s: %s", resp.Status, snippet)
+		return "", fmt.Errorf("github: token exchange: %s: %s", resp.Status, respBody)
 	}
 
 	var body struct {
 		AccessToken string `json:"access_token"`
+		TokenType   string `json:"token_type"`
+		Scope       string `json:"scope"`
 		Error       string `json:"error"`
 		ErrorDesc   string `json:"error_description"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
-		return "", fmt.Errorf("github: decode token response: %w", err)
+	if err := json.Unmarshal(respBody, &body); err != nil {
+		return "", fmt.Errorf("github: decode token response: %w (raw: %s)", err, respBody)
 	}
 	if body.Error != "" {
 		return "", fmt.Errorf("github: token exchange: %s: %s", body.Error, body.ErrorDesc)
 	}
 	if body.AccessToken == "" {
-		return "", fmt.Errorf("github: token exchange: empty access_token in response")
+		// Log the full raw response so we can see what GitHub actually sent.
+		return "", fmt.Errorf("github: token exchange: empty access_token (scope=%q raw=%s)", body.Scope, respBody)
 	}
 	return body.AccessToken, nil
 }

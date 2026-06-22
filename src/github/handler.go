@@ -1,7 +1,3 @@
-// Package github implements the GitHub App OAuth flow and repository
-// import UI for Quisac: connecting a GitHub App installation, exchanging
-// the OAuth code for a user token, and letting the user pick a repo to
-// import.
 package github
 
 import (
@@ -22,15 +18,16 @@ type Handler struct {
 	log      *slog.Logger
 }
 
+type importPageData struct {
+	Title   string
+	OrgName string
+	Repos   []Repo
+}
+
 // HandlerOption configures optional behavior on a Handler. This mirrors
 // palantir/go-githubapp's functional-options pattern (their oauth2.Param).
 type HandlerOption func(*Handler)
 
-// WithStateStore overrides the OAuth CSRF StateStore used by the Handler.
-// The default is a short-lived HttpOnly cookie (cookieStateStore), which is
-// sufficient for a single-instance deployment. Pass a different StateStore
-// implementation if state needs to survive across instances, e.g. behind a
-// load balancer with no sticky sessions.
 func WithStateStore(s StateStore) HandlerOption {
 	return func(h *Handler) {
 		h.state = s
@@ -114,10 +111,6 @@ func (h *Handler) handleCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// GitHub may redirect here without a `code` (e.g. an installation-only
-	// flow). Without a code we have nothing to exchange for a token, so
-	// just send the user on to import and let it prompt for connect again
-	// if no session exists yet.
 	code := q.Get("code")
 	if code == "" {
 		http.Redirect(w, r, "/github/import", http.StatusFound)
@@ -153,8 +146,6 @@ func (h *Handler) handleCallback(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/github/import", http.StatusFound)
 }
 
-// handleImport renders the repo picker, listing repos visible to the
-// installation stored in the user's session.
 func (h *Handler) handleImport(w http.ResponseWriter, r *http.Request) {
 	sess, err := h.requireSession(w, r)
 	if err != nil {
@@ -175,14 +166,6 @@ func (h *Handler) handleImport(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-type importPageData struct {
-	Title   string
-	OrgName string
-	Repos   []Repo
-}
-
-// handleImportSelect records the user's chosen repo on the session and
-// sends them back to the dashboard.
 func (h *Handler) handleImportSelect(w http.ResponseWriter, r *http.Request) {
 	sess, err := h.requireSession(w, r)
 	if err != nil {
@@ -212,9 +195,6 @@ func (h *Handler) handleImportSelect(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, dest, http.StatusFound)
 }
 
-// requireSession loads the session cookie, redirecting to /github/connect
-// and returning a non-nil error if there isn't a usable one. Callers
-// should return immediately when err != nil.
 func (h *Handler) requireSession(w http.ResponseWriter, r *http.Request) (*session, error) {
 	sess, err := h.sessions.Load(r)
 	if err != nil {
@@ -232,9 +212,7 @@ func (h *Handler) requireSession(w http.ResponseWriter, r *http.Request) (*sessi
 }
 
 // render executes tmpl's "layout" template with data, writing a 500 on
-// failure. Because html/template buffers nothing by default, a failure
-// partway through execution can leak a partial page; that tradeoff is
-// accepted here since these are simple, well-tested templates.
+// failure.
 func (h *Handler) render(w http.ResponseWriter, tmpl *template.Template, data any) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := tmpl.ExecuteTemplate(w, "layout", data); err != nil {

@@ -15,28 +15,17 @@ import (
 // mid-call.
 const tokenRefreshSkew = 2 * time.Minute
 
-// installationClient is a GitHub API client authenticated as a specific
-// app installation (not a user). It mints its own access token via the
-// app's JWT and refreshes it automatically when it is close to expiring.
-//
-// Use this for requests Quisac makes on its own behalf — reacting to a
-// webhook, opening a PR as the app — where there is no logged-in user
-// session to borrow a token from. For requests made while a user is
-// actively in the OAuth flow, use client instead.
 type installationClient struct {
 	appID          int64
 	installationID int64
 	privateKey     *rsa.PrivateKey
-	apiBase        string // e.g. "https://api.github.com"
-	webBase        string // e.g. "https://github.com" — used to mint tokens
-
-	mu        sync.Mutex
-	token     string
-	expiresAt time.Time
+	apiBase        string
+	webBase        string
+	mu             sync.Mutex
+	token          string
+	expiresAt      time.Time
 }
 
-// newInstallationClient builds a client authenticated as the given
-// installation of the app described by cfg. cfg must pass ValidateAppAuth.
 func newInstallationClient(cfg Config, installationID int64) (*installationClient, error) {
 	if err := cfg.ValidateAppAuth(); err != nil {
 		return nil, err
@@ -54,9 +43,6 @@ func newInstallationClient(cfg Config, installationID int64) (*installationClien
 	}, nil
 }
 
-// accessToken returns a valid installation access token, minting or
-// refreshing one if the cached token is missing or close to expiry.
-// Safe for concurrent use.
 func (c *installationClient) accessToken(ctx context.Context) (string, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -74,16 +60,12 @@ func (c *installationClient) accessToken(ctx context.Context) (string, error) {
 	return c.token, nil
 }
 
-// mintToken requests a fresh installation access token from GitHub,
-// authenticating the request with a freshly-signed app JWT.
 func (c *installationClient) mintToken(ctx context.Context) (token string, expiresAt time.Time, err error) {
 	appJWT, err := signAppJWT(c.appID, c.privateKey, time.Now())
 	if err != nil {
 		return "", time.Time{}, fmt.Errorf("github: sign app jwt: %w", err)
 	}
 
-	// GitHub Enterprise Server uses /api/v3/app/installations/... ;
-	// apiBase already has the right prefix regardless of the host.
 	url := fmt.Sprintf("%s/app/installations/%d/access_tokens", c.apiBase, c.installationID)
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, nil)
@@ -118,8 +100,6 @@ func (c *installationClient) mintToken(ctx context.Context) (token string, expir
 	return body.Token, body.ExpiresAt, nil
 }
 
-// get issues an authenticated GET to the GitHub API as this installation,
-// minting or refreshing the access token as needed, and decodes the JSON
 // response body into out. Mirrors client.get's shape and error conventions.
 func (c *installationClient) get(ctx context.Context, path string, out any) error {
 	token, err := c.accessToken(ctx)
