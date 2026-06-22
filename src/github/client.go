@@ -11,51 +11,50 @@ import (
 )
 
 const (
-	apiBase  = "https://api.github.com"
-	apiVer   = "2026-06-21"
-	tokenURL = "https://github.com/login/oauth/access_token"
-
+	apiVer         = "2022-11-28"
 	requestTimeout = 10 * time.Second
 )
+
+// httpClient is shared by every outbound call this package makes.
+// http.Client is safe for concurrent use; there is no per-request state
+// that needs isolating between callers.
+var httpClient = &http.Client{Timeout: requestTimeout}
 
 // Installation is a GitHub App installation.
 type Installation struct {
 	ID      int64 `json:"id"`
 	Account struct {
-		Login     string `json:"login"`
-		AvatarURL string `json:"avatar_url"`
-		Type      string `json:"type"` // "User" | "Organization"
+		Login string `json:"login"`
+		Type  string `json:"type"` // "User" | "Organization"
 	} `json:"account"`
 }
 
 // Repo is a GitHub repository.
 type Repo struct {
-	ID          int64  `json:"id"`
-	Name        string `json:"name"`
-	FullName    string `json:"full_name"`
-	Private     bool   `json:"private"`
-	Description string `json:"description"`
-	UpdatedAt   string `json:"updated_at"`
-	Language    string `json:"language"`
+	ID       int64  `json:"id"`
+	Name     string `json:"name"`
+	FullName string `json:"full_name"`
+	Private  bool   `json:"private"`
+	Language string `json:"language"`
 }
 
 // client is a minimal GitHub API client authenticated with a user token.
 type client struct {
-	token string
-	http  *http.Client
+	token   string
+	apiBase string // e.g. "https://api.github.com"
 }
 
-func newClient(token string) *client {
+func newClient(token string, cfg Config) *client {
 	return &client{
-		token: token,
-		http:  &http.Client{Timeout: requestTimeout},
+		token:   token,
+		apiBase: cfg.apiBaseURL(),
 	}
 }
 
 // get issues an authenticated GET to the GitHub API and decodes the JSON
 // response body into out.
 func (c *client) get(ctx context.Context, path string, out any) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, apiBase+path, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.apiBase+path, nil)
 	if err != nil {
 		return fmt.Errorf("github: build request: %w", err)
 	}
@@ -63,7 +62,7 @@ func (c *client) get(ctx context.Context, path string, out any) error {
 	req.Header.Set("Accept", "application/vnd.github+json")
 	req.Header.Set("X-GitHub-Api-Version", apiVer)
 
-	resp, err := c.http.Do(req)
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("github: GET %s: %w", path, err)
 	}
@@ -82,7 +81,9 @@ func (c *client) get(ctx context.Context, path string, out any) error {
 // accessible to the authenticated user.
 //
 // GitHub has no GET /user/installations/:id endpoint, so this lists all
-// installations and filters client-side.
+// installations and filters client-side. For typical per-user installation
+// counts this is one cheap request; it's not designed to scale to users
+// with hundreds of installations.
 func (c *client) FindInstallation(ctx context.Context, id int64) (*Installation, error) {
 	var body struct {
 		Installations []Installation `json:"installations"`
@@ -112,6 +113,8 @@ func (c *client) ListRepos(ctx context.Context, installationID int64) ([]Repo, e
 
 // exchangeCode trades an OAuth code for a user access token.
 func exchangeCode(ctx context.Context, cfg Config, code string) (string, error) {
+	tokenURL := cfg.webBaseURL() + "/login/oauth/access_token"
+
 	params := url.Values{
 		"client_id":     {cfg.ClientID},
 		"client_secret": {cfg.ClientSecret},
@@ -126,7 +129,6 @@ func exchangeCode(ctx context.Context, cfg Config, code string) (string, error) 
 	req.URL.RawQuery = params.Encode()
 	req.Header.Set("Accept", "application/json")
 
-	httpClient := &http.Client{Timeout: requestTimeout}
 	resp, err := httpClient.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("github: token exchange request: %w", err)
@@ -134,8 +136,6 @@ func exchangeCode(ctx context.Context, cfg Config, code string) (string, error) 
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		// Read a bounded amount of body for diagnostics without risking
-		// an unbounded read on an unexpected response.
 		snippet, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<10))
 		return "", fmt.Errorf("github: token exchange: %s: %s", resp.Status, snippet)
 	}
