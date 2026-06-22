@@ -159,7 +159,6 @@ func exchangeCode(ctx context.Context, cfg Config, code string) (string, error) 
 		return "", fmt.Errorf("github: token exchange: %s: %s", body.Error, body.ErrorDesc)
 	}
 	if body.AccessToken == "" {
-		// Log the full raw response so we can see what GitHub actually sent.
 		return "", fmt.Errorf("github: token exchange: empty access_token (scope=%q raw=%s)", body.Scope, respBody)
 	}
 	return body.AccessToken, nil
