@@ -18,19 +18,40 @@ import (
 type Handler struct {
 	cfg      Config
 	sessions sessionStore
+	state    StateStore
 	log      *slog.Logger
 }
 
+// HandlerOption configures optional behavior on a Handler. This mirrors
+// palantir/go-githubapp's functional-options pattern (their oauth2.Param).
+type HandlerOption func(*Handler)
+
+// WithStateStore overrides the OAuth CSRF StateStore used by the Handler.
+// The default is a short-lived HttpOnly cookie (cookieStateStore), which is
+// sufficient for a single-instance deployment. Pass a different StateStore
+// implementation if state needs to survive across instances, e.g. behind a
+// load balancer with no sticky sessions.
+func WithStateStore(s StateStore) HandlerOption {
+	return func(h *Handler) {
+		h.state = s
+	}
+}
+
 // NewHandler builds a Handler. cfg must pass Validate.
-func NewHandler(cfg Config, log *slog.Logger) *Handler {
+func NewHandler(cfg Config, log *slog.Logger, opts ...HandlerOption) *Handler {
 	if log == nil {
 		log = slog.Default()
 	}
-	return &Handler{
+	h := &Handler{
 		cfg:      cfg,
 		sessions: newSessionStore(cfg.SessionSecret),
+		state:    cookieStateStore{},
 		log:      log.With("component", "github"),
 	}
+	for _, opt := range opts {
+		opt(h)
+	}
+	return h
 }
 
 // Register mounts the GitHub OAuth + import routes onto mux.
@@ -55,16 +76,15 @@ func (h *Handler) handleConnect(w http.ResponseWriter, r *http.Request) {
 
 // handleConnectGo starts the GitHub App installation/OAuth redirect.
 func (h *Handler) handleConnectGo(w http.ResponseWriter, r *http.Request) {
-	state, err := newOAuthState()
+	state, err := h.state.GenerateState(w, r)
 	if err != nil {
 		h.log.Error("generate oauth state", "err", err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
-	setOAuthStateCookie(w, state)
 
-	dest := fmt.Sprintf("https://github.com/apps/%s/installations/new?state=%s",
-		h.cfg.AppSlug, url.QueryEscape(state))
+	dest := fmt.Sprintf("%s/apps/%s/installations/new?state=%s",
+		h.cfg.webBaseURL(), h.cfg.AppSlug, url.QueryEscape(state))
 	h.log.Info("redirecting to github install", "url", dest)
 	http.Redirect(w, r, dest, http.StatusFound)
 }
@@ -75,8 +95,14 @@ func (h *Handler) handleCallback(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	h.log.Info("callback received", "installation_id", q.Get("installation_id"))
 
-	if err := verifyOAuthState(r); err != nil {
-		h.log.Warn("oauth state check failed", "err", err)
+	valid, err := h.state.VerifyState(r, q.Get("state"))
+	if err != nil {
+		h.log.Error("oauth state check error", "err", err)
+		http.Error(w, "invalid state", http.StatusBadRequest)
+		return
+	}
+	if !valid {
+		h.log.Warn("oauth state mismatch", "err", errStateMismatch)
 		http.Error(w, "invalid state", http.StatusBadRequest)
 		return
 	}
@@ -107,7 +133,7 @@ func (h *Handler) handleCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	gh := newClient(token)
+	gh := newClient(token, h.cfg)
 
 	inst, err := gh.FindInstallation(ctx, installID)
 	if err != nil {
@@ -135,7 +161,7 @@ func (h *Handler) handleImport(w http.ResponseWriter, r *http.Request) {
 		return // requireSession already redirected
 	}
 
-	gh := newClient(sess.Token)
+	gh := newClient(sess.Token, h.cfg)
 	repos, err := gh.ListRepos(r.Context(), sess.Installation.ID)
 	if err != nil {
 		h.log.Error("list repos failed", "installation_id", sess.Installation.ID, "err", err)
