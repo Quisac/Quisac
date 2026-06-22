@@ -8,7 +8,12 @@ import (
 	"quisac/src/filewalk"
 )
 
-const PORT = "8000"
+func getPort() string {
+	if p := os.Getenv("PORT"); p != "" {
+		return p
+	}
+	return "8000"
+}
 
 func main() {
 	var (
@@ -21,8 +26,9 @@ func main() {
 	if *serve {
 		fs := http.FileServer(http.Dir("html"))
 		http.Handle("/", fs)
-		fmt.Printf("serving → http://localhost:%s\n", PORT)
-		if err := http.ListenAndServe(":"+PORT, nil); err != nil {
+		port := getPort()
+		fmt.Printf("serving → http://localhost:%s\n", port)
+		if err := http.ListenAndServe(":"+port, nil); err != nil {
 			fmt.Println("server error:", err)
 		}
 		return
