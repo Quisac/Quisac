@@ -6,9 +6,15 @@ import (
 	"net/http"
 	"os"
 	"quisac/src/filewalk"
+	"strings"
 )
 
-const PORT = "8000"
+func getPort() string {
+	if p := os.Getenv("PORT"); p != "" {
+		return p
+	}
+	return "8000"
+}
 
 func main() {
 	var (
@@ -19,10 +25,19 @@ func main() {
 	flag.Parse()
 
 	if *serve {
-		fs := http.FileServer(http.Dir("html"))
-		http.Handle("/", fs)
-		fmt.Printf("serving → http://localhost:%s\n", PORT)
-		if err := http.ListenAndServe(":"+PORT, nil); err != nil {
+		mux := http.NewServeMux()
+		fs := http.FileServer(http.Dir("html/dist"))
+		mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+			if strings.HasSuffix(r.URL.Path, ".js") {
+				w.Header().Set("Content-Type", "application/javascript")
+			} else if strings.HasSuffix(r.URL.Path, ".css") {
+				w.Header().Set("Content-Type", "text/css")
+			}
+			fs.ServeHTTP(w, r)
+		})
+		port := getPort()
+		fmt.Printf("serving → http://localhost:%s\n", port)
+		if err := http.ListenAndServe(":"+port, mux); err != nil {
 			fmt.Println("server error:", err)
 		}
 		return
@@ -31,8 +46,6 @@ func main() {
 	if *dir != "" {
 		graph := filewalk.ReadRepo(*dir)
 		graph.Print()
-
-		// Also emit JSON for the frontend
 		json, err := graph.ToJSON()
 		if err != nil {
 			fmt.Println("json error:", err)
