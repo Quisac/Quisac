@@ -10,8 +10,6 @@ const PROVIDERS = [
   { id: 'bitbucket', name: 'Bitbucket', enabled: false },
 ]
 
-// ConnectProvider is the clean "choose your Git provider" step shown before we
-// redirect to the provider. Only GitHub is live today.
 export default function ConnectProvider({ onBack }) {
   const connect = () => { window.location.href = '/api/connect' }
 
