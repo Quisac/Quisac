@@ -5,6 +5,7 @@ package server
 import (
 	"crypto/rand"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"strings"
@@ -40,6 +41,7 @@ func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/connect", s.handleConnect)
 	mux.HandleFunc("/api/github/callback", s.handleCallback)
+	mux.HandleFunc("/api/repos", s.handleRepos)
 	mux.HandleFunc("/", s.handleStatic)
 	return mux
 }
@@ -132,6 +134,38 @@ func (s *Server) validState(r *http.Request, returned string) bool {
 	}
 	want, ok := s.signer.Verify(c.Value)
 	return ok && want == returned
+}
+
+// handleRepos returns, as JSON, the repositories the connected installation
+// can access — the data the dashboard renders as the repository picker. It
+// requires a valid session cookie carrying the installation_id.
+func (s *Server) handleRepos(w http.ResponseWriter, r *http.Request) {
+	installationID, ok := s.session(r)
+	if !ok {
+		http.Error(w, "not connected", http.StatusUnauthorized)
+		return
+	}
+
+	repos, err := s.app.Repositories(r.Context(), installationID)
+	if err != nil {
+		fmt.Println("list repos error:", err)
+		http.Error(w, "could not list repositories", http.StatusBadGateway)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(repos); err != nil {
+		fmt.Println("encode repos error:", err)
+	}
+}
+
+// session returns the installation_id from a verified session cookie.
+func (s *Server) session(r *http.Request) (string, bool) {
+	c, err := r.Cookie(sessionCookie)
+	if err != nil {
+		return "", false
+	}
+	return s.signer.Verify(c.Value)
 }
 
 // handleStatic serves the built frontend from html/dist.
