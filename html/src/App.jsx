@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import Landing from './components/Landing'
 import Dashboard from './components/Dashboard'
+import ConnectProvider from './components/ConnectProvider'
 import useSession from './useSession'
 
 export default function App() {
@@ -9,6 +10,7 @@ export default function App() {
   // state to keep in sync.
   const { loading, session } = useSession()
   const [activeView, setActiveView] = useState('dashboard')
+  const [connecting, setConnecting] = useState(false)
 
   if (loading) return null
 
@@ -22,5 +24,9 @@ export default function App() {
     )
   }
 
-  return <Landing />
+  if (connecting) {
+    return <ConnectProvider onBack={() => setConnecting(false)} />
+  }
+
+  return <Landing onConnect={() => setConnecting(true)} />
 }

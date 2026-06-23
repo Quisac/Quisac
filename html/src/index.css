@@ -619,6 +619,73 @@ body {
 }
 .pr-btn:hover { border-color: var(--blue); }
 
+/* connect provider screen */
+.connect-overlay {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg);
+  padding: 2rem;
+}
+.connect-card {
+  width: 100%;
+  max-width: 420px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 2.25rem;
+  text-align: center;
+}
+.connect-logo { font-size: 18px; font-weight: 600; color: var(--text); }
+.connect-logo span { color: var(--blue); }
+.connect-title { font-size: 22px; font-weight: 600; color: var(--text); margin: 1.25rem 0 0.5rem; }
+.connect-sub { font-size: 14px; line-height: 1.5; color: var(--muted); margin-bottom: 1.75rem; }
+.connect-providers { display: flex; flex-direction: column; gap: 0.6rem; }
+.provider-row {
+  display: flex;
+  align-items: center;
+  gap: 0.85rem;
+  width: 100%;
+  padding: 0.9rem 1.1rem;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+}
+.provider-row:hover:not(:disabled) { border-color: var(--blue); background: var(--blue-lt); }
+.provider-row:disabled { opacity: 0.5; cursor: not-allowed; }
+.provider-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px; height: 28px;
+  color: var(--text);
+}
+.provider-name { text-align: left; }
+.provider-arrow { margin-left: auto; font-size: 13px; color: var(--blue); }
+.provider-soon {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  padding: 2px 7px;
+}
+.connect-back {
+  margin-top: 1.5rem;
+  font-size: 13px;
+  color: var(--muted);
+  background: none;
+  border: none;
+  cursor: pointer;
+}
+.connect-back:hover { color: var(--text); }
+
 /* repository picker */
 .repo-list { display: flex; flex-direction: column; }
 .repo-row {
