@@ -9,6 +9,59 @@ import (
 	"strings"
 )
 
+// AuthorizeURL returns GitHub's OAuth authorize URL. Unlike the install URL,
+// this is clean for returning users: it grants identity instantly without
+// showing the "configure/uninstall" management screen. We then look up the
+// user's existing installation. state defends against CSRF.
+func (a *App) AuthorizeURL(state string) string {
+	u := url.URL{Scheme: "https", Host: "github.com", Path: "/login/oauth/authorize"}
+	q := u.Query()
+	q.Set("client_id", a.clientID)
+	q.Set("redirect_uri", a.redirectURL)
+	q.Set("state", state)
+	u.RawQuery = q.Encode()
+	return u.String()
+}
+
+// Installation identifies one installation of the app on a user/org account.
+type Installation struct {
+	ID      int64 `json:"id"`
+	Account struct {
+		Login string `json:"login"`
+	} `json:"account"`
+}
+
+// UserInstallations lists the installations of this app that the user (via
+// their OAuth token) can access. An empty result means the app is not yet
+// installed for them.
+func (a *App) UserInstallations(ctx context.Context, userToken string) ([]Installation, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
+		"https://api.github.com/user/installations?per_page=100", nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+userToken)
+	req.Header.Set("Accept", "application/vnd.github+json")
+
+	resp, err := a.http.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("github: GET /user/installations returned %s", resp.Status)
+	}
+
+	var body struct {
+		Installations []Installation `json:"installations"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		return nil, err
+	}
+	return body.Installations, nil
+}
+
 // ExchangeCode trades the OAuth code returned by the install + authorize flow
 // for a user access token. The token identifies the human who connected and
 // confirms they completed authorization.

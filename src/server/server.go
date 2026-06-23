@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"quisac/src/config"
@@ -40,6 +41,7 @@ func New(cfg *config.Config) *Server {
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/connect", s.handleConnect)
+	mux.HandleFunc("/api/install", s.handleInstall)
 	mux.HandleFunc("/github/callback", s.handleCallback)
 	mux.HandleFunc("/api/me", s.handleMe)
 	mux.HandleFunc("/api/logout", s.handleLogout)
@@ -55,17 +57,30 @@ func (s *Server) ListenAndServe() error {
 	return http.ListenAndServe(":"+port, s.Handler())
 }
 
-// handleConnect starts the GitHub App install + authorize flow. It generates
-// an unguessable state, stores it in a signed, short-lived cookie, and
-// redirects the browser to GitHub's installation consent screen. The callback
-// later checks the returned state against this cookie to defend against CSRF.
+// handleConnect starts the connect flow via OAuth authorize. This is clean for
+// returning users (no "configure/uninstall" management screen); the callback
+// then resolves the user's existing installation, or sends a first-time user
+// on to install.
 func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
+	s.startFlow(w, s.app.AuthorizeURL)
+}
+
+// handleInstall sends the user to GitHub's installation screen — to install the
+// app for the first time, or to add/remove repositories ("Configure on
+// GitHub"). This is the screen with the "All / Only select repositories"
+// picker.
+func (s *Server) handleInstall(w http.ResponseWriter, r *http.Request) {
+	s.startFlow(w, s.app.InstallURL)
+}
+
+// startFlow mints a CSRF state, stores it in a signed short-lived cookie, and
+// redirects to the URL built by urlFor(state).
+func (s *Server) startFlow(w http.ResponseWriter, urlFor func(string) string) {
 	state, err := randomState()
 	if err != nil {
 		http.Error(w, "could not start connect flow", http.StatusInternalServerError)
 		return
 	}
-
 	http.SetCookie(w, &http.Cookie{
 		Name:     oauthStateCookie,
 		Value:    s.signer.Sign(state),
@@ -75,8 +90,8 @@ func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
 		Secure:   s.secureCookies(),
 		SameSite: http.SameSiteLaxMode,
 	})
-
-	http.Redirect(w, r, s.app.InstallURL(state), http.StatusFound)
+	w.Header().Set("Location", urlFor(state))
+	w.WriteHeader(http.StatusFound)
 }
 
 // handleCallback completes the install + authorize flow. GitHub redirects here
@@ -94,25 +109,41 @@ func (s *Server) handleCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	installationID := q.Get("installation_id")
-	if installationID == "" {
-		http.Error(w, "missing installation_id", http.StatusBadRequest)
+	code := q.Get("code")
+	if code == "" {
+		http.Error(w, "missing code", http.StatusBadRequest)
 		return
 	}
 
-	// Exchange the code to confirm the user genuinely authorized the app, and
-	// to learn their login for display.
-	login := ""
-	if code := q.Get("code"); code != "" {
-		token, err := s.app.ExchangeCode(r.Context(), code)
+	// Exchange the code for the user's token: confirms authorization and lets
+	// us learn their login and installations.
+	token, err := s.app.ExchangeCode(r.Context(), code)
+	if err != nil {
+		http.Error(w, "authorization failed", http.StatusBadGateway)
+		return
+	}
+	login, _ := s.app.User(r.Context(), token)
+
+	// Path A: returned from the install screen — installation_id is explicit.
+	installationID := q.Get("installation_id")
+
+	// Path B: returned from OAuth authorize — resolve the user's installation.
+	// A first-time user has none yet, so send them on to install.
+	if installationID == "" {
+		installs, err := s.app.UserInstallations(r.Context(), token)
 		if err != nil {
-			http.Error(w, "authorization failed", http.StatusBadGateway)
+			http.Error(w, "could not read installations", http.StatusBadGateway)
 			return
 		}
-		if l, err := s.app.User(r.Context(), token); err == nil {
-			login = l
+		if len(installs) == 0 {
+			s.startFlow(w, s.app.InstallURL)
+			return
 		}
+		// TODO: when a user has multiple installations (e.g. several orgs),
+		// let them choose. For now use the first.
+		installationID = strconv.FormatInt(installs[0].ID, 10)
 	}
+
 	fmt.Printf("connected: installation=%s user=%s\n", installationID, login)
 
 	if err := s.setSession(w, sessionData{InstallationID: installationID, Login: login}); err != nil {
