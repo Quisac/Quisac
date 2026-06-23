@@ -4,7 +4,9 @@
 package github
 
 import (
+	"net/http"
 	"net/url"
+	"time"
 
 	"quisac/src/config"
 )
@@ -21,6 +23,8 @@ type App struct {
 
 	clientID     string
 	clientSecret string
+
+	http *http.Client
 }
 
 // New builds an App from the GitHub section of the config.
@@ -33,6 +37,7 @@ func New(cfg config.GitHub) *App {
 		webhookSecret: cfg.App.WebhookSecret,
 		clientID:      cfg.OAuth.ClientID,
 		clientSecret:  cfg.OAuth.ClientSecret,
+		http:          &http.Client{Timeout: 10 * time.Second},
 	}
 }
 
