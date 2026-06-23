@@ -3,18 +3,11 @@ package main
 import (
 	"flag"
 	"fmt"
-	"net/http"
 	"os"
+	"quisac/src/config"
 	"quisac/src/filewalk"
-	"strings"
+	"quisac/src/server"
 )
-
-func getPort() string {
-	if p := os.Getenv("PORT"); p != "" {
-		return p
-	}
-	return "8000"
-}
 
 func main() {
 	var (
@@ -25,20 +18,14 @@ func main() {
 	flag.Parse()
 
 	if *serve {
-		mux := http.NewServeMux()
-		fs := http.FileServer(http.Dir("html/dist"))
-		mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-			if strings.HasSuffix(r.URL.Path, ".js") {
-				w.Header().Set("Content-Type", "application/javascript")
-			} else if strings.HasSuffix(r.URL.Path, ".css") {
-				w.Header().Set("Content-Type", "text/css")
-			}
-			fs.ServeHTTP(w, r)
-		})
-		port := getPort()
-		fmt.Printf("serving → http://localhost:%s\n", port)
-		if err := http.ListenAndServe(":"+port, mux); err != nil {
+		cfg, err := config.Load()
+		if err != nil {
+			fmt.Println("config error:", err)
+			os.Exit(1)
+		}
+		if err := server.New(cfg).ListenAndServe(); err != nil {
 			fmt.Println("server error:", err)
+			os.Exit(1)
 		}
 		return
 	}
