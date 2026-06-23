@@ -413,6 +413,8 @@ body {
   white-space: nowrap;
 }
 .connect-btn:hover { background: #1557b0; }
+.dash-account { font-size: 13px; color: var(--muted); }
+.dash-account strong { color: var(--text); font-weight: 500; }
 
 .dash-body {
   display: flex;
