@@ -3,7 +3,10 @@ import Landing from './components/Landing'
 import Dashboard from './components/Dashboard'
 
 export default function App() {
-  const [view, setView] = useState('landing')
+  // GitHub redirects back to /?connected=1 after install + authorize; land the
+  // user straight on the dashboard in that case.
+  const startConnected = new URLSearchParams(window.location.search).has('connected')
+  const [view, setView] = useState(startConnected ? 'dashboard' : 'landing')
   const [activeView, setActiveView] = useState('dashboard')
 
   if (view === 'dashboard') {
@@ -16,5 +19,5 @@ export default function App() {
     )
   }
 
-  return <Landing onShowDashboard={() => setView('dashboard')} />
+  return <Landing />
 }

@@ -6,8 +6,9 @@ const STEPS = [
   { num: '05', name: 'GitHub PR',        desc: 'Fix validated and pushed as a ready-to-merge PR. Your team reviews, not triages.',                                                                                            tag: 'ready to merge',    cls: 'tag-green' },
 ]
 
-export default function Landing({ onShowDashboard }) {
-  const go = (e) => { e.preventDefault(); onShowDashboard() }
+export default function Landing() {
+  // Every auth CTA starts the real GitHub App install + authorize flow.
+  const go = (e) => { e.preventDefault(); window.location.href = '/api/connect' }
 
   return (
     <div>

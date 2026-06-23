@@ -2,6 +2,7 @@ import Sidebar from './Sidebar'
 import GraphCard from './GraphCard'
 import LogCard from './LogCard'
 import ResolutionCard from './ResolutionCard'
+import RepoPicker from './RepoPicker'
 
 export default function Dashboard({ activeView, onNavigate, onShowLanding }) {
   return (
@@ -15,7 +16,7 @@ export default function Dashboard({ activeView, onNavigate, onShowLanding }) {
         <div className="dash-topbar-right">
           <span className="badge badge-amber">1 resolving</span>
           <span className="badge badge-green">12 resolved today</span>
-          <a className="connect-btn" href="#">Connect repo</a>
+          <a className="connect-btn" href="/api/connect">Connect repo</a>
         </div>
       </header>
 
@@ -33,6 +34,7 @@ export default function Dashboard({ activeView, onNavigate, onShowLanding }) {
 
           {activeView === 'dashboard' && (
             <>
+              <RepoPicker />
               <GraphCard />
               <LogCard />
               <ResolutionCard />

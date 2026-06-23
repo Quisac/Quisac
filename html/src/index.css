@@ -617,6 +617,27 @@ body {
 }
 .pr-btn:hover { border-color: var(--blue); }
 
+/* repository picker */
+.repo-list { display: flex; flex-direction: column; }
+.repo-row {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.85rem 1.25rem;
+  border-bottom: 1px solid var(--border);
+}
+.repo-row:last-child { border-bottom: none; }
+.repo-name { font-size: 13px; color: var(--text); font-weight: 500; }
+.repo-import { margin-left: auto; }
+.repo-empty {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 1.25rem;
+  font-size: 13px;
+  color: var(--muted);
+}
+
 .coming-soon {
   padding: 3rem 2rem;
   color: var(--muted);
