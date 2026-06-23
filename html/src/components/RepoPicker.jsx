@@ -3,14 +3,10 @@ import { useEffect, useMemo, useState } from 'react'
 const connect = () => { window.location.href = '/api/connect' }
 const configure = () => { window.location.href = '/api/install' }
 
-// RepoPicker lists the repositories granted to the installation and lets the
-// user search, select, and import them — Vercel-style. "Configure on GitHub"
-// sends the user to the install screen to add or remove repositories.
 export default function RepoPicker() {
   const [state, setState] = useState({ status: 'loading', repos: [], error: null })
   const [query, setQuery] = useState('')
   const [selected, setSelected] = useState(() => new Set())
-  const [note, setNote] = useState('')
 
   useEffect(() => {
     let cancelled = false
@@ -51,7 +47,6 @@ export default function RepoPicker() {
   }
 
   const importSelected = () => {
-    setNote(`Importing ${selected.size} ${selected.size === 1 ? 'repository' : 'repositories'} — indexing coming soon.`)
   }
 
   return (
@@ -122,7 +117,6 @@ export default function RepoPicker() {
           {state.repos.length > 0 && (
             <div className="repo-footer">
               <span className="repo-count">{selected.size} selected</span>
-              {note && <span className="repo-note">{note}</span>}
               <button className="connect-btn repo-import-btn" disabled={selected.size === 0} onClick={importSelected}>
                 Import selected
               </button>
