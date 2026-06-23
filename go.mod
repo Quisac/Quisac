@@ -9,4 +9,7 @@ require (
 	github.com/tree-sitter/tree-sitter-python v0.25.0
 )
 
-require github.com/mattn/go-pointer v0.0.1 // indirect
+require (
+	github.com/joho/godotenv v1.5.1 // indirect
+	github.com/mattn/go-pointer v0.0.1 // indirect
+)
