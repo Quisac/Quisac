@@ -40,7 +40,7 @@ func New(cfg *config.Config) *Server {
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/connect", s.handleConnect)
-	mux.HandleFunc("/api/github/callback", s.handleCallback)
+	mux.HandleFunc("/github/callback", s.handleCallback)
 	mux.HandleFunc("/api/repos", s.handleRepos)
 	mux.HandleFunc("/", s.handleStatic)
 	return mux
@@ -78,7 +78,8 @@ func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleCallback completes the install + authorize flow. GitHub redirects here
-// with a state, an OAuth code, and the installation_id. We verify state against
+// (the app's Callback URL, /github/callback) with a state, an OAuth code, and
+// the installation_id. We verify state against
 // the signed cookie (CSRF), exchange the code to confirm the user authorized,
 // and store the installation_id in a session cookie. Repositories are then
 // read from the installation itself, so the user's OAuth token is not kept.
