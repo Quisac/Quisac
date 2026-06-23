@@ -1,0 +1,11 @@
+# secrets — never commit
+.env
+.env.local
+
+# build output
+out
+html/dist
+html/node_modules
+
+# os
+.DS_Store

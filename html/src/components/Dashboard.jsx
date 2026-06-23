@@ -2,20 +2,29 @@ import Sidebar from './Sidebar'
 import GraphCard from './GraphCard'
 import LogCard from './LogCard'
 import ResolutionCard from './ResolutionCard'
+import RepoPicker from './RepoPicker'
 
-export default function Dashboard({ activeView, onNavigate, onShowLanding }) {
+export default function Dashboard({ session, activeView, onNavigate }) {
+  const disconnect = async () => {
+    await fetch('/api/logout', { method: 'POST', credentials: 'same-origin' })
+    window.location.href = '/'
+  }
+
   return (
     <div className="dash-shell">
       <header className="dash-topbar">
         <div className="dash-topbar-left">
-          <span className="dash-logo" onClick={onShowLanding}>
+          <span className="dash-logo">
             Quis<span>ac</span>
           </span>
         </div>
         <div className="dash-topbar-right">
           <span className="badge badge-amber">1 resolving</span>
           <span className="badge badge-green">12 resolved today</span>
-          <a className="connect-btn" href="#">Connect repo</a>
+          <span className="dash-account">
+            Connected as <strong>{session.login || 'GitHub'}</strong>
+          </span>
+          <button className="connect-btn" onClick={disconnect}>Disconnect</button>
         </div>
       </header>
 
@@ -33,6 +42,7 @@ export default function Dashboard({ activeView, onNavigate, onShowLanding }) {
 
           {activeView === 'dashboard' && (
             <>
+              <RepoPicker />
               <GraphCard />
               <LogCard />
               <ResolutionCard />
