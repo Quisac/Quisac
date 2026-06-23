@@ -1,9 +1,3 @@
-// Package session signs and verifies short cookie values with HMAC-SHA256.
-//
-// It does not encrypt — values are readable by the client — but a value that
-// fails verification is rejected, so the server can trust that it issued any
-// value it accepts. This is enough for CSRF state and, later, a session id
-// that points at server-side state.
 package session
 
 import (

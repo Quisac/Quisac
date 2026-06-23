@@ -1,5 +1,3 @@
-// Package server wires the HTTP routes: the static frontend and the GitHub
-// App connect flow.
 package server
 
 import (
@@ -66,8 +64,7 @@ func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleInstall sends the user to GitHub's installation screen — to install the
-// app for the first time, or to add/remove repositories ("Configure on
-// GitHub"). This is the screen with the "All / Only select repositories"
+// app for the first time, or to add/remove repositories"
 // picker.
 func (s *Server) handleInstall(w http.ResponseWriter, r *http.Request) {
 	s.startFlow(w, s.app.InstallURL)
@@ -124,11 +121,8 @@ func (s *Server) handleCallback(w http.ResponseWriter, r *http.Request) {
 	}
 	login, _ := s.app.User(r.Context(), token)
 
-	// Path A: returned from the install screen — installation_id is explicit.
 	installationID := q.Get("installation_id")
 
-	// Path B: returned from OAuth authorize — resolve the user's installation.
-	// A first-time user has none yet, so send them on to install.
 	if installationID == "" {
 		installs, err := s.app.UserInstallations(r.Context(), token)
 		if err != nil {
@@ -168,10 +162,6 @@ func (s *Server) validState(r *http.Request, returned string) bool {
 	return ok && want == returned
 }
 
-// handleMe reports the current connection state so the SPA can decide what to
-// render. It returns the connected account, or 401 when there is no valid
-// session — the HttpOnly session cookie, not client state, is the source of
-// truth for "am I connected?".
 func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 	sd, ok := s.session(r)
 	if !ok {

@@ -10,9 +10,7 @@ import (
 )
 
 // AuthorizeURL returns GitHub's OAuth authorize URL. Unlike the install URL,
-// this is clean for returning users: it grants identity instantly without
-// showing the "configure/uninstall" management screen. We then look up the
-// user's existing installation. state defends against CSRF.
+// this is clean for returning users
 func (a *App) AuthorizeURL(state string) string {
 	u := url.URL{Scheme: "https", Host: "github.com", Path: "/login/oauth/authorize"}
 	q := u.Query()

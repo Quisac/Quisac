@@ -4,6 +4,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+
 	"quisac/src/config"
 	"quisac/src/filewalk"
 	"quisac/src/server"
@@ -38,7 +39,7 @@ func main() {
 			fmt.Println("json error:", err)
 			os.Exit(1)
 		}
-		if err := os.WriteFile("html/graph.json", []byte(json), 0644); err != nil {
+		if err := os.WriteFile("html/graph.json", []byte(json), 0o644); err != nil {
 			fmt.Println("write error:", err)
 			os.Exit(1)
 		}
