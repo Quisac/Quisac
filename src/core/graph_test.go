@@ -1,28 +1,27 @@
-package tests
+package core
 
 import (
 	"encoding/json"
-	"quisac/src/astparsers"
-	"quisac/src/core"
 	"testing"
+
+	"quisac/src/astparsers"
 )
 
 func TestGraphCreation(t *testing.T) {
-	g := core.NewGraph()
+	g := NewGraph()
 	if g == nil {
 		t.Fatal("Expected new graph, got nil")
 	}
 
 	e := &astparsers.Extracted{
-		FilePath: "main.py",
-		Imports:  []string{"import os"},
+		FilePath:  "main.py",
+		Imports:   []string{"import os"},
 		Functions: []string{"main"},
-		Classes: []string{"App"},
+		Classes:   []string{"App"},
 		Calls: []astparsers.CallEdge{
 			{CallerScope: "func:main", Target: "os.getenv", Kind: "call"},
 		},
 	}
-
 	g.AddFile(e)
 
 	if len(g.Nodes) == 0 {

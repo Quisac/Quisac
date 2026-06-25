@@ -9,3 +9,12 @@ html/node_modules
 
 # os
 .DS_Store
+
+#graph generratewd
+html/graph.json
+
+#test-json-file
+datadog-secrets.json
+
+#private key
+quisac.2026-06-23.private-key.pem

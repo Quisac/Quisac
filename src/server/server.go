@@ -39,11 +39,12 @@ func New(cfg *config.Config) *Server {
 	}
 }
 
-func skipNgrokWarning(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("ngrok-skip-browser-warning", "true")
-		next.ServeHTTP(w, r)
-	})
+func NewWithStore(cfg *config.Config, ds *store.DatadogStore) *Server {
+	return &Server{
+		cfg:     cfg,
+		signer:  session.NewSigner(cfg.Server.SessionSecret),
+		ddStore: ds,
+	}
 }
 
 // Handler returns the router with all routes registered.
@@ -55,11 +56,11 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/me", s.handleMe)
 	mux.HandleFunc("/api/logout", s.handleLogout)
 	mux.HandleFunc("/api/repos", s.handleRepos)
+	mux.HandleFunc("/", s.handleStatic)
 	mux.HandleFunc("/datadog/webhook", s.handleDatadogWebhook)
 	mux.HandleFunc("/api/datadog/provision", s.handleDatadogProvision)
 	mux.HandleFunc("/api/datadog/rotate", s.handleDatadogRotate)
-	mux.HandleFunc("/", s.handleStatic) // must be last
-	return skipNgrokWarning(mux)
+	return mux
 }
 
 // ListenAndServe starts the HTTP server on the configured port.

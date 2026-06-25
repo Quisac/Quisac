@@ -1,18 +1,15 @@
-package tests
+package github
 
 import (
 	"net/url"
 	"testing"
 
 	"quisac/src/config"
-	"quisac/src/github"
 )
 
 func TestInstallURL(t *testing.T) {
-	app := github.New(config.GitHub{AppSlug: "quisac"})
-
+	app := New(config.GitHub{AppSlug: "quisac"})
 	raw := app.InstallURL("xyz state/with+chars")
-
 	u, err := url.Parse(raw)
 	if err != nil {
 		t.Fatalf("InstallURL produced invalid URL %q: %v", raw, err)

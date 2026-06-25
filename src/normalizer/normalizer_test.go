@@ -1,9 +1,7 @@
-package tests
+package normalizer
 
 import (
 	"testing"
-
-	"quisac/src/normalizer"
 )
 
 func TestPathToModule(t *testing.T) {
@@ -19,7 +17,7 @@ func TestPathToModule(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		result := normalizer.PathToModule(tt.filePath, tt.repoRoot)
+		result := PathToModule(tt.filePath, tt.repoRoot)
 		if result != tt.expected {
 			t.Errorf("PathToModule(%q, %q) = %q, want %q", tt.filePath, tt.repoRoot, result, tt.expected)
 		}
@@ -52,7 +50,7 @@ func TestFilterInternal(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		result := normalizer.FilterInternal(tt.imports, graphNodes)
+		result := FilterInternal(tt.imports, graphNodes)
 		if len(result) != len(tt.expected) {
 			t.Errorf("FilterInternal(%v) = %v, want %v", tt.imports, result, tt.expected)
 			continue
@@ -72,7 +70,7 @@ func TestBuildNodeSet(t *testing.T) {
 		"/repo/src/services/auth.go",
 	}
 
-	result := normalizer.BuildNodeSet(filePaths, "/repo")
+	result := BuildNodeSet(filePaths, "/repo")
 
 	expected := map[string]bool{
 		"src.services.payment": true,
