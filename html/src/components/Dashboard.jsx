@@ -33,7 +33,13 @@ export default function Dashboard({ session, activeView, onNavigate }) {
 
         <main className="main">
           <div className="main-header">
-            <h1 className="main-title">Dashboard</h1>
+            <h1 className="main-title">
+              {activeView === 'dashboard' && 'Dashboard'}
+              {activeView === 'graph'     && 'Code graph'}
+              {activeView === 'incidents' && 'Incidents'}
+              {activeView === 'prs'       && 'Pull requests'}
+              {activeView === 'patterns'  && 'Patterns'}
+            </h1>
             <div className="main-badges">
               <span className="badge badge-amber">1 resolving</span>
               <span className="badge badge-green">12 resolved today</span>
@@ -43,13 +49,16 @@ export default function Dashboard({ session, activeView, onNavigate }) {
           {activeView === 'dashboard' && (
             <>
               <RepoPicker />
-              <GraphCard />
               <LogCard />
               <ResolutionCard />
             </>
           )}
 
-          {activeView !== 'dashboard' && (
+          {activeView === 'graph' && (
+            <GraphCard />
+          )}
+
+          {activeView !== 'dashboard' && activeView !== 'graph' && (
             <div className="coming-soon">
               This view is coming soon.
             </div>
