@@ -172,11 +172,7 @@ export default function Landing({ onConnect }) {
           <div className="stat-val">2–3</div>
           <div className="stat-lbl">files ever seen by the LLM</div>
         </div>
-        <div className="stat-block">
-          <div className="stat-val">$30</div>
-          <div className="stat-lbl">per resolved incident</div>
-        </div>
-      </div>
+
 
       {/* LOGO STRIP */}
       <div className="logo-strip" style={{ borderTop: '1px solid rgba(0,0,0,0.06)', borderBottom: '1px solid rgba(0,0,0,0.06)' }}>
