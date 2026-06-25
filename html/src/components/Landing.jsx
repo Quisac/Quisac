@@ -172,7 +172,10 @@ export default function Landing({ onConnect }) {
           <div className="stat-val">2–3</div>
           <div className="stat-lbl">files ever seen by the LLM</div>
         </div>
-      </div>
+
+
+      {/* LOGO STRIP */}
+      
 
       {/* FEATURES */}
       <section className="section" id="features">
