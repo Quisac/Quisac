@@ -1,9 +1,8 @@
-package tests
+package filewalk
 
 import (
 	"os"
 	"path/filepath"
-	"quisac/src/filewalk"
 	"testing"
 )
 
@@ -15,7 +14,6 @@ func TestReadRepo(t *testing.T) {
 	pyContent := `
 import os
 from utils import helper
-
 class MainApp:
     def run(self):
         helper()
@@ -35,11 +33,10 @@ def helper():
 	}
 
 	// 3. Walk the directory and generate the graph
-	g := filewalk.ReadRepo(tempDir)
+	g := ReadRepo(tempDir)
 	if g == nil {
 		t.Fatal("Expected graph, got nil")
 	}
-
 	if len(g.Nodes) == 0 {
 		t.Errorf("Graph has no nodes")
 	}
@@ -52,7 +49,6 @@ def helper():
 			break
 		}
 	}
-
 	if !hasImportEdge {
 		t.Errorf("Expected an Imports edge from main.py to utils.py, but it was not found")
 	}

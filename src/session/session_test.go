@@ -1,14 +1,11 @@
-package tests
+package session
 
 import (
 	"testing"
-
-	"quisac/src/session"
 )
 
 func TestSignVerifyRoundTrip(t *testing.T) {
-	s := session.NewSigner("super-secret")
-
+	s := NewSigner("super-secret")
 	token := s.Sign("hello-state")
 	got, ok := s.Verify(token)
 	if !ok {
@@ -20,7 +17,7 @@ func TestSignVerifyRoundTrip(t *testing.T) {
 }
 
 func TestVerifyRejectsTamperAndWrongKey(t *testing.T) {
-	s := session.NewSigner("super-secret")
+	s := NewSigner("super-secret")
 	token := s.Sign("hello-state")
 
 	if _, ok := s.Verify(token + "x"); ok {
@@ -29,7 +26,7 @@ func TestVerifyRejectsTamperAndWrongKey(t *testing.T) {
 	if _, ok := s.Verify("hello-state"); ok {
 		t.Error("unsigned value was accepted")
 	}
-	if _, ok := session.NewSigner("other-secret").Verify(token); ok {
+	if _, ok := NewSigner("other-secret").Verify(token); ok {
 		t.Error("token signed with a different key was accepted")
 	}
 }
