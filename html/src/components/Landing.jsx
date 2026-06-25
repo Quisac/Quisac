@@ -175,14 +175,7 @@ export default function Landing({ onConnect }) {
 
 
       {/* LOGO STRIP */}
-      <div className="logo-strip" style={{ borderTop: '1px solid rgba(0,0,0,0.06)', borderBottom: '1px solid rgba(0,0,0,0.06)' }}>
-        <span className="logo-strip-label">Used by engineering teams at</span>
-        <span className="logo-pill">Acme Corp</span>
-        <span className="logo-pill">Relay HQ</span>
-        <span className="logo-pill">Meridian</span>
-        <span className="logo-pill">Stackline</span>
-        <span className="logo-pill">Vanta Labs</span>
-      </div>
+      
 
       {/* FEATURES */}
       <section className="section" id="features">
