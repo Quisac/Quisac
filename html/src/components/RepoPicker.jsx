@@ -3,6 +3,29 @@ import { useEffect, useMemo, useState } from 'react'
 const connect = () => { window.location.href = '/api/connect' }
 const configure = () => { window.location.href = '/api/install' }
 
+// "owner/repo" → { owner: "owner", name: "repo" }. Falls back gracefully if the
+// shape is ever unexpected so a row never renders blank.
+const splitName = (fullName) => {
+  const i = fullName.lastIndexOf('/')
+  if (i === -1) return { owner: '', name: fullName }
+  return { owner: fullName.slice(0, i), name: fullName.slice(i + 1) }
+}
+
+const LockIcon = () => (
+  <svg width="12" height="12" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+    <rect x="3" y="7" width="10" height="6.5" rx="1.5" stroke="currentColor" strokeWidth="1.4" />
+    <path d="M5.25 7V5.25a2.75 2.75 0 0 1 5.5 0V7" stroke="currentColor" strokeWidth="1.4" />
+  </svg>
+)
+
+const GlobeIcon = () => (
+  <svg width="12" height="12" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+    <circle cx="8" cy="8" r="5.5" stroke="currentColor" strokeWidth="1.4" />
+    <path d="M2.5 8h11M8 2.5c1.6 1.6 1.6 9.4 0 11M8 2.5C6.4 4.1 6.4 11.9 8 13.5"
+      stroke="currentColor" strokeWidth="1.4" />
+  </svg>
+)
+
 export default function RepoPicker({ onSelect }) {
   const [state, setState] = useState({ status: 'loading', repos: [], error: null })
   const [query, setQuery] = useState('')
@@ -46,55 +69,70 @@ export default function RepoPicker({ onSelect }) {
     })
   }
 
-  // ✅ FIXED: Get selected repo and call onSelect
   const importSelected = () => {
-    const selectedRepos = state.repos.filter((r) => selected.has(r.id))
-    if (selectedRepos.length === 0) return
-
-    // Pass the first selected repo's full_name to parent
-    const repoFullName = selectedRepos[0].full_name
-    onSelect?.(repoFullName)
+    const first = state.repos.find((r) => selected.has(r.id))
+    if (first) onSelect?.(first.full_name)
   }
 
-  // ✅ ADDED: Quick index single repo directly
-  const indexRepo = (repo) => {
-    onSelect?.(repo.full_name)
-  }
+  const indexRepo = (repo) => { onSelect?.(repo.full_name) }
 
   return (
     <div className="card repo-picker">
       <div className="card-header">
-        <span className="card-title">Import a repository</span>
+        <div className="repo-heading">
+          <span className="card-title">Index a repository</span>
+          {state.status === 'ready' && (
+            <span className="repo-subtitle">
+              {state.repos.length} {state.repos.length === 1 ? 'repository' : 'repositories'} available
+            </span>
+          )}
+        </div>
         {state.status === 'ready' && (
-          <button className="repo-config-link" onClick={configure}>Configure on GitHub ↗</button>
+          <button className="repo-config-link" onClick={configure}>Manage access ↗</button>
         )}
       </div>
 
       {state.status === 'loading' && (
-        <div className="repo-empty">Loading your repositories…</div>
+        <div className="repo-list">
+          {[0, 1, 2].map((i) => (
+            <div className="repo-row repo-row-skeleton" key={i}>
+              <span className="repo-skel repo-skel-check" />
+              <span className="repo-skel repo-skel-name" />
+              <span className="repo-skel repo-skel-chip" />
+            </div>
+          ))}
+        </div>
       )}
 
       {state.status === 'unauth' && (
         <div className="repo-empty">
-          Connect your GitHub account to import repositories.
-          <button className="pr-btn repo-import" onClick={connect}>Connect your repo</button>
+          <p className="repo-empty-text">Connect your GitHub account to index repositories.</p>
+          <button className="connect-btn" onClick={connect}>Connect GitHub</button>
         </div>
       )}
 
       {state.status === 'error' && (
-        <div className="repo-empty">Could not load repositories ({state.error}).</div>
+        <div className="repo-empty">
+          <p className="repo-empty-text">Couldn’t load repositories — {state.error}.</p>
+        </div>
       )}
 
       {state.status === 'ready' && (
         <>
           <div className="repo-toolbar">
-            <input
-              className="repo-search"
-              type="text"
-              placeholder="Search repositories…"
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-            />
+            <div className="repo-search-wrap">
+              <svg className="repo-search-icon" width="15" height="15" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                <circle cx="7" cy="7" r="4.5" stroke="currentColor" strokeWidth="1.4" />
+                <path d="m11 11 3 3" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+              </svg>
+              <input
+                className="repo-search"
+                type="text"
+                placeholder="Search repositories…"
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+              />
+            </div>
             {filtered.length > 0 && (
               <label className="repo-selectall">
                 <input type="checkbox" checked={allShownSelected} onChange={toggleAllShown} />
@@ -104,48 +142,64 @@ export default function RepoPicker({ onSelect }) {
           </div>
 
           <div className="repo-list">
-            {filtered.map((r) => (
-              <label className="repo-row" key={r.id}>
-                <input type="checkbox" checked={selected.has(r.id)} onChange={() => toggle(r.id)} />
-                <span className="repo-name">{r.full_name}</span>
-                <span className={`badge ${r.private ? 'badge-amber' : 'badge-green'}`}>
-                  {r.private ? 'Private' : 'Public'}
-                </span>
-                {/* ✅ ADDED: Quick index button per repo */}
-                <button
-                  className="pr-btn repo-index-btn"
-                  onClick={(e) => {
-                    e.preventDefault()
-                    e.stopPropagation()
-                    indexRepo(r)
-                  }}
-                >
-                  Index
-                </button>
-              </label>
-            ))}
+            {filtered.map((r) => {
+              const { owner, name } = splitName(r.full_name)
+              const isSelected = selected.has(r.id)
+              return (
+                <label className={`repo-row${isSelected ? ' is-selected' : ''}`} key={r.id}>
+                  <input
+                    className="repo-check"
+                    type="checkbox"
+                    checked={isSelected}
+                    onChange={() => toggle(r.id)}
+                  />
+                  <span className="repo-name">
+                    {owner && <span className="repo-owner">{owner}/</span>}
+                    <span className="repo-repo">{name}</span>
+                  </span>
+                  <span className={`repo-vis ${r.private ? 'repo-vis-private' : 'repo-vis-public'}`}>
+                    {r.private ? <LockIcon /> : <GlobeIcon />}
+                    {r.private ? 'Private' : 'Public'}
+                  </span>
+                  <button
+                    className="repo-index-btn"
+                    onClick={(e) => {
+                      e.preventDefault()
+                      e.stopPropagation()
+                      indexRepo(r)
+                    }}
+                  >
+                    Index
+                  </button>
+                </label>
+              )
+            })}
 
             {filtered.length === 0 && state.repos.length > 0 && (
-              <div className="repo-empty">No repositories match "{query}".</div>
+              <div className="repo-empty">
+                <p className="repo-empty-text">No repositories match “{query}”.</p>
+              </div>
             )}
 
             {state.repos.length === 0 && (
               <div className="repo-empty">
-                No repositories granted yet.
-                <button className="pr-btn repo-import" onClick={configure}>Add repositories</button>
+                <p className="repo-empty-text">No repositories granted yet.</p>
+                <button className="connect-btn" onClick={configure}>Add repositories</button>
               </div>
             )}
           </div>
 
           {state.repos.length > 0 && (
             <div className="repo-footer">
-              <span className="repo-count">{selected.size} selected</span>
+              <span className="repo-count">
+                {selected.size > 0 ? `${selected.size} selected` : 'Select repositories to index'}
+              </span>
               <button
                 className="connect-btn repo-import-btn"
                 disabled={selected.size === 0}
                 onClick={importSelected}
               >
-                Import selected
+                Index {selected.size > 0 ? selected.size : ''} {selected.size === 1 ? 'repository' : 'repositories'}
               </button>
             </div>
           )}

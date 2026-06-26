@@ -86,7 +86,9 @@ func (a *App) DownloadRepo(
 		return "", nil, fmt.Errorf("DownloadRepo: archive link: %w", err)
 	}
 
-		return "", nil, err
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, archiveURL.String(), nil)
+	if err != nil {
+		return "", nil, fmt.Errorf("DownloadRepo: build request: %w", err)
 	}
 
 	httpClient := &http.Client{Timeout: 10 * time.Minute}
