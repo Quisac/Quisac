@@ -2,131 +2,64 @@ package github
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
-	"net/http"
-	"net/url"
-	"strings"
+
+	"github.com/google/go-github/v75/github"
+	"golang.org/x/oauth2"
 )
 
-// AuthorizeURL returns GitHub's OAuth authorize URL. Unlike the install URL,
-// this is clean for returning users
 func (a *App) AuthorizeURL(state string) string {
-	u := url.URL{Scheme: "https", Host: "github.com", Path: "/login/oauth/authorize"}
-	q := u.Query()
-	q.Set("client_id", a.clientID)
-	q.Set("redirect_uri", a.redirectURL)
-	q.Set("state", state)
-	u.RawQuery = q.Encode()
-	return u.String()
+	return a.oauth.AuthCodeURL(state)
 }
 
-// Installation identifies one installation of the app on a user/org account.
-type Installation struct {
-	ID      int64 `json:"id"`
-	Account struct {
-		Login string `json:"login"`
-	} `json:"account"`
-}
-
-// UserInstallations lists the installations of this app that the user (via
-// their OAuth token) can access. An empty result means the app is not yet
-// installed for them.
-func (a *App) UserInstallations(ctx context.Context, userToken string) ([]Installation, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
-		"https://api.github.com/user/installations?per_page=100", nil)
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Authorization", "Bearer "+userToken)
-	req.Header.Set("Accept", "application/vnd.github+json")
-
-	resp, err := a.http.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("github: GET /user/installations returned %s", resp.Status)
-	}
-
-	var body struct {
-		Installations []Installation `json:"installations"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
-		return nil, err
-	}
-	return body.Installations, nil
-}
-
-// ExchangeCode trades the OAuth code returned by the install + authorize flow
-// for a user access token. The token identifies the human who connected and
-// confirms they completed authorization.
 func (a *App) ExchangeCode(ctx context.Context, code string) (string, error) {
-	form := url.Values{
-		"client_id":     {a.clientID},
-		"client_secret": {a.clientSecret},
-		"code":          {code},
-		"redirect_uri":  {a.redirectURL},
-	}
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
-		"https://github.com/login/oauth/access_token", strings.NewReader(form.Encode()))
+	tok, err := a.oauth.Exchange(ctx, code)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("github: token exchange: %w", err)
 	}
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	req.Header.Set("Accept", "application/json")
-
-	resp, err := a.http.Do(req)
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("github: token exchange returned %s", resp.Status)
-	}
-
-	var body struct {
-		AccessToken string `json:"access_token"`
-		Error       string `json:"error_description"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
-		return "", err
-	}
-	if body.AccessToken == "" {
-		return "", fmt.Errorf("github: token exchange failed: %s", body.Error)
-	}
-	return body.AccessToken, nil
+	return tok.AccessToken, nil
 }
 
-// User returns the login of the user who owns the given access token.
+func (a *App) userClient(ctx context.Context, userToken string) *github.Client {
+	ts := oauth2.StaticTokenSource(&oauth2.Token{AccessToken: userToken})
+	return github.NewClient(oauth2.NewClient(ctx, ts))
+}
+
 func (a *App) User(ctx context.Context, userToken string) (string, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
-		"https://api.github.com/user", nil)
+	u, _, err := a.userClient(ctx, userToken).Users.Get(ctx, "")
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("github: get user: %w", err)
 	}
-	req.Header.Set("Authorization", "Bearer "+userToken)
-	req.Header.Set("Accept", "application/vnd.github+json")
+	return u.GetLogin(), nil
+}
 
-	resp, err := a.http.Do(req)
-	if err != nil {
-		return "", err
+type Installation struct {
+	ID      int64
+	Account struct {
+		Login string
 	}
-	defer resp.Body.Close()
+}
 
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("github: GET /user returned %s", resp.Status)
-	}
+func (a *App) UserInstallations(ctx context.Context, userToken string) ([]Installation, error) {
+	client := a.userClient(ctx, userToken)
 
-	var body struct {
-		Login string `json:"login"`
+	opt := &github.ListOptions{PerPage: 100}
+	var out []Installation
+	for {
+		insts, resp, err := client.Apps.ListUserInstallations(ctx, opt)
+		if err != nil {
+			return nil, fmt.Errorf("github: list user installations: %w", err)
+		}
+		for _, in := range insts {
+			var i Installation
+			i.ID = in.GetID()
+			i.Account.Login = in.GetAccount().GetLogin()
+			out = append(out, i)
+		}
+		if resp.NextPage == 0 {
+			break
+		}
+		opt.Page = resp.NextPage
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
-		return "", err
-	}
-	return body.Login, nil
+	return out, nil
 }
