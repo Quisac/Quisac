@@ -24,7 +24,12 @@ func main() {
 			fmt.Println("config error:", err)
 			os.Exit(1)
 		}
-		if err := server.New(cfg).ListenAndServe(); err != nil {
+		srv, err := server.New(cfg)
+		if err != nil {
+			fmt.Println("server error:", err)
+			os.Exit(1)
+		}
+		if err := srv.ListenAndServe(); err != nil {
 			fmt.Println("server error:", err)
 			os.Exit(1)
 		}

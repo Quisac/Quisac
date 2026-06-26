@@ -1,6 +1,10 @@
 package tests
 
 import (
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/x509"
+	"encoding/pem"
 	"net/url"
 	"testing"
 
@@ -8,8 +12,29 @@ import (
 	"quisac/src/github"
 )
 
+// testPrivateKey generates a throwaway RSA key in PEM form so github.New can
+// build its app transport without reaching out to GitHub.
+func testPrivateKey(t *testing.T) string {
+	t.Helper()
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(pem.EncodeToMemory(&pem.Block{
+		Type:  "RSA PRIVATE KEY",
+		Bytes: x509.MarshalPKCS1PrivateKey(key),
+	}))
+}
+
 func TestInstallURL(t *testing.T) {
-	app := github.New(config.GitHub{AppSlug: "quisac"})
+	cfg := config.GitHub{AppSlug: "quisac"}
+	cfg.App.IntegrationID = 1234
+	cfg.App.PrivateKey = testPrivateKey(t)
+
+	app, err := github.New(cfg)
+	if err != nil {
+		t.Fatalf("github.New: %v", err)
+	}
 
 	raw := app.InstallURL("xyz state/with+chars")
 

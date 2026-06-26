@@ -3,7 +3,7 @@ import { useEffect, useMemo, useState } from 'react'
 const connect = () => { window.location.href = '/api/connect' }
 const configure = () => { window.location.href = '/api/install' }
 
-export default function RepoPicker() {
+export default function RepoPicker({ onSelect }) {
   const [state, setState] = useState({ status: 'loading', repos: [], error: null })
   const [query, setQuery] = useState('')
   const [selected, setSelected] = useState(() => new Set())
@@ -46,7 +46,19 @@ export default function RepoPicker() {
     })
   }
 
+  // ✅ FIXED: Get selected repo and call onSelect
   const importSelected = () => {
+    const selectedRepos = state.repos.filter((r) => selected.has(r.id))
+    if (selectedRepos.length === 0) return
+
+    // Pass the first selected repo's full_name to parent
+    const repoFullName = selectedRepos[0].full_name
+    onSelect?.(repoFullName)
+  }
+
+  // ✅ ADDED: Quick index single repo directly
+  const indexRepo = (repo) => {
+    onSelect?.(repo.full_name)
   }
 
   return (
@@ -99,11 +111,22 @@ export default function RepoPicker() {
                 <span className={`badge ${r.private ? 'badge-amber' : 'badge-green'}`}>
                   {r.private ? 'Private' : 'Public'}
                 </span>
+                {/* ✅ ADDED: Quick index button per repo */}
+                <button
+                  className="pr-btn repo-index-btn"
+                  onClick={(e) => {
+                    e.preventDefault()
+                    e.stopPropagation()
+                    indexRepo(r)
+                  }}
+                >
+                  Index
+                </button>
               </label>
             ))}
 
             {filtered.length === 0 && state.repos.length > 0 && (
-              <div className="repo-empty">No repositories match “{query}”.</div>
+              <div className="repo-empty">No repositories match "{query}".</div>
             )}
 
             {state.repos.length === 0 && (
@@ -117,7 +140,11 @@ export default function RepoPicker() {
           {state.repos.length > 0 && (
             <div className="repo-footer">
               <span className="repo-count">{selected.size} selected</span>
-              <button className="connect-btn repo-import-btn" disabled={selected.size === 0} onClick={importSelected}>
+              <button
+                className="connect-btn repo-import-btn"
+                disabled={selected.size === 0}
+                onClick={importSelected}
+              >
                 Import selected
               </button>
             </div>

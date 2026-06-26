@@ -1,4 +1,6 @@
 # secrets — never commit
+secrets
+./secrets
 .env
 .env.local
 

@@ -27,17 +27,23 @@ type Server struct {
 }
 
 // New builds a Server from a resolved config.
-func New(cfg *config.Config) *Server {
+func New(cfg *config.Config) (*Server, error) {
+	app, err := github.New(cfg.GitHub)
+	if err != nil {
+		return nil, err
+	}
 	return &Server{
 		cfg:    cfg,
-		app:    github.New(cfg.GitHub),
+		app:    app,
 		signer: session.NewSigner(cfg.Server.SessionSecret),
-	}
+	}, nil
 }
 
 // Handler returns the router with all routes registered.
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
+	mux.HandleFunc("/api/index", s.handleIndex)
+	mux.HandleFunc("/api/graph/", s.handleGraph)
 	mux.HandleFunc("/api/connect", s.handleConnect)
 	mux.HandleFunc("/api/install", s.handleInstall)
 	mux.HandleFunc("/github/callback", s.handleCallback)
@@ -55,24 +61,19 @@ func (s *Server) ListenAndServe() error {
 	return http.ListenAndServe(":"+port, s.Handler())
 }
 
-// handleConnect starts the connect flow via OAuth authorize. This is clean for
-// returning users (no "configure/uninstall" management screen); the callback
-// then resolves the user's existing installation, or sends a first-time user
-// on to install.
+// handleConnect starts the connect flow via OAuth authorize.
 func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
-	s.startFlow(w, s.app.AuthorizeURL)
+	s.startFlow(w, r, s.app.AuthorizeURL)
 }
 
-// handleInstall sends the user to GitHub's installation screen — to install the
-// app for the first time, or to add/remove repositories"
-// picker.
+// handleInstall sends the user to GitHub's installation screen.
 func (s *Server) handleInstall(w http.ResponseWriter, r *http.Request) {
-	s.startFlow(w, s.app.InstallURL)
+	s.startFlow(w, r, s.app.InstallURL)
 }
 
 // startFlow mints a CSRF state, stores it in a signed short-lived cookie, and
 // redirects to the URL built by urlFor(state).
-func (s *Server) startFlow(w http.ResponseWriter, urlFor func(string) string) {
+func (s *Server) startFlow(w http.ResponseWriter, r *http.Request, urlFor func(string) string) {
 	state, err := randomState()
 	if err != nil {
 		http.Error(w, "could not start connect flow", http.StatusInternalServerError)
@@ -84,22 +85,17 @@ func (s *Server) startFlow(w http.ResponseWriter, urlFor func(string) string) {
 		Path:     "/",
 		MaxAge:   600, // 10 minutes to complete the flow
 		HttpOnly: true,
-		Secure:   s.secureCookies(),
+		Secure:   s.secureCookies(r),
 		SameSite: http.SameSiteLaxMode,
 	})
 	w.Header().Set("Location", urlFor(state))
 	w.WriteHeader(http.StatusFound)
 }
 
-// handleCallback completes the install + authorize flow. GitHub redirects here
-// (the app's Callback URL, /github/callback) with a state, an OAuth code, and
-// the installation_id. We verify state against
-// the signed cookie (CSRF), exchange the code to confirm the user authorized,
-// and store the installation_id in a session cookie. Repositories are then
-// read from the installation itself, so the user's OAuth token is not kept.
+// handleCallback completes the install + authorize flow.
 func (s *Server) handleCallback(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
-	clearCookie(w, oauthStateCookie, s.secureCookies())
+	clearCookie(w, oauthStateCookie, s.secureCookies(r))
 
 	if !s.validState(r, q.Get("state")) {
 		http.Error(w, "invalid or expired state", http.StatusBadRequest)
@@ -112,8 +108,6 @@ func (s *Server) handleCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Exchange the code for the user's token: confirms authorization and lets
-	// us learn their login and installations.
 	token, err := s.app.ExchangeCode(r.Context(), code)
 	if err != nil {
 		http.Error(w, "authorization failed", http.StatusBadGateway)
@@ -130,17 +124,15 @@ func (s *Server) handleCallback(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if len(installs) == 0 {
-			s.startFlow(w, s.app.InstallURL)
+			s.startFlow(w, r, s.app.InstallURL)
 			return
 		}
-		// TODO: when a user has multiple installations (e.g. several orgs),
-		// let them choose. For now use the first.
 		installationID = strconv.FormatInt(installs[0].ID, 10)
 	}
 
 	fmt.Printf("connected: installation=%s user=%s\n", installationID, login)
 
-	if err := s.setSession(w, sessionData{InstallationID: installationID, Login: login}); err != nil {
+	if err := s.setSession(w, r, sessionData{InstallationID: installationID, Login: login}); err != nil {
 		http.Error(w, "could not create session", http.StatusInternalServerError)
 		return
 	}
@@ -176,15 +168,13 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// handleLogout clears the session cookie ("Disconnect").
+// handleLogout clears the session cookie.
 func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
-	clearCookie(w, sessionCookie, s.secureCookies())
+	clearCookie(w, sessionCookie, s.secureCookies(r))
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// handleRepos returns, as JSON, the repositories the connected installation
-// can access — the data the dashboard renders as the repository picker. It
-// requires a valid session cookie carrying the installation_id.
+// handleRepos returns the repositories the connected installation can access.
 func (s *Server) handleRepos(w http.ResponseWriter, r *http.Request) {
 	sd, ok := s.session(r)
 	if !ok {
@@ -205,16 +195,14 @@ func (s *Server) handleRepos(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// sessionData is the payload carried in the signed session cookie. The login
-// is not secret; it is stored so the dashboard can greet the user without an
-// extra GitHub round-trip.
+// sessionData is the payload carried in the signed session cookie.
 type sessionData struct {
 	InstallationID string `json:"installation_id"`
 	Login          string `json:"login"`
 }
 
 // setSession encodes sd as a signed cookie and writes it.
-func (s *Server) setSession(w http.ResponseWriter, sd sessionData) error {
+func (s *Server) setSession(w http.ResponseWriter, r *http.Request, sd sessionData) error {
 	b, err := json.Marshal(sd)
 	if err != nil {
 		return err
@@ -226,7 +214,7 @@ func (s *Server) setSession(w http.ResponseWriter, sd sessionData) error {
 		Path:     "/",
 		MaxAge:   7 * 24 * 3600,
 		HttpOnly: true,
-		Secure:   s.secureCookies(),
+		Secure:   s.secureCookies(r),
 		SameSite: http.SameSiteLaxMode,
 	})
 	return nil
@@ -263,10 +251,12 @@ func (s *Server) handleStatic(w http.ResponseWriter, r *http.Request) {
 	http.FileServer(http.Dir("html/dist")).ServeHTTP(w, r)
 }
 
-// secureCookies reports whether cookies should carry the Secure flag, i.e.
-// when the app is served over HTTPS (everywhere except local http).
-func (s *Server) secureCookies() bool {
-	return strings.HasPrefix(s.cfg.GitHub.RedirectURL, "https://")
+// secureCookies reports whether cookies should carry the Secure flag.
+// It reads the X-Forwarded-Proto header set by reverse proxies (Railway, ngrok,
+// nginx, etc.) when they terminate TLS and forward as plain HTTP. This is the
+// standard way to detect HTTPS behind a proxy without hardcoding env vars.
+func (s *Server) secureCookies(r *http.Request) bool {
+	return r.Header.Get("X-Forwarded-Proto") == "https"
 }
 
 // clearCookie expires a cookie by name.

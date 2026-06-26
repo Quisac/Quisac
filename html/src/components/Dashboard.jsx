@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import Sidebar from './Sidebar'
 import GraphCard from './GraphCard'
 import LogCard from './LogCard'
@@ -5,6 +6,9 @@ import ResolutionCard from './ResolutionCard'
 import RepoPicker from './RepoPicker'
 
 export default function Dashboard({ session, activeView, onNavigate }) {
+  // ✅ Add state for selected repo
+  const [selectedRepo, setSelectedRepo] = useState('')
+
   const disconnect = async () => {
     await fetch('/api/logout', { method: 'POST', credentials: 'same-origin' })
     window.location.href = '/'
@@ -42,8 +46,10 @@ export default function Dashboard({ session, activeView, onNavigate }) {
 
           {activeView === 'dashboard' && (
             <>
-              <RepoPicker />
-              <GraphCard />
+              {/* ✅ Pass onSelect to RepoPicker */}
+              <RepoPicker onSelect={setSelectedRepo} />
+              {/* ✅ Pass repo to GraphCard */}
+              <GraphCard repoFullName={selectedRepo} />
               <LogCard />
               <ResolutionCard />
             </>
