@@ -25,12 +25,13 @@ func (a *App) userClient(ctx context.Context, userToken string) *github.Client {
 	return github.NewClient(oauth2.NewClient(ctx, ts))
 }
 
-func (a *App) User(ctx context.Context, userToken string) (string, error) {
+// User returns the authenticated user's stable numeric id and login.
+func (a *App) User(ctx context.Context, userToken string) (int64, string, error) {
 	u, _, err := a.userClient(ctx, userToken).Users.Get(ctx, "")
 	if err != nil {
-		return "", fmt.Errorf("github: get user: %w", err)
+		return 0, "", fmt.Errorf("github: get user: %w", err)
 	}
-	return u.GetLogin(), nil
+	return u.GetID(), u.GetLogin(), nil
 }
 
 type Installation struct {

@@ -1,11 +1,13 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"os"
 
 	"quisac/src/config"
+	"quisac/src/db"
 	"quisac/src/filewalk"
 	"quisac/src/server"
 )
@@ -24,7 +26,15 @@ func main() {
 			fmt.Println("config error:", err)
 			os.Exit(1)
 		}
-		srv, err := server.New(cfg)
+
+		store, err := db.Open(context.Background(), cfg.Database.URL)
+		if err != nil {
+			fmt.Println("database error:", err)
+			os.Exit(1)
+		}
+		defer store.Close()
+
+		srv, err := server.New(cfg, store)
 		if err != nil {
 			fmt.Println("server error:", err)
 			os.Exit(1)

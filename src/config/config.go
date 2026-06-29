@@ -9,8 +9,13 @@ import (
 )
 
 type Config struct {
-	GitHub GitHub
-	Server Server
+	GitHub   GitHub
+	Server   Server
+	Database Database
+}
+
+type Database struct {
+	URL string // DATABASE_URL, e.g. postgres://user:pass@host:5432/quisac
 }
 
 type GitHub struct {
@@ -57,6 +62,7 @@ func (c *Config) SetValuesFromEnv() {
 	setStringFromEnv("GITHUB_CLIENT_SECRET", &c.GitHub.OAuth.ClientSecret)
 	setStringFromEnv("QUISAC_SESSION_SECRET", &c.Server.SessionSecret)
 	setStringFromEnv("PORT", &c.Server.Port)
+	setStringFromEnv("DATABASE_URL", &c.Database.URL)
 }
 
 func (c *Config) validate() error {
@@ -70,6 +76,7 @@ func (c *Config) validate() error {
 		{"GITHUB_CLIENT_ID", c.GitHub.OAuth.ClientID != ""},
 		{"GITHUB_CLIENT_SECRET", c.GitHub.OAuth.ClientSecret != ""},
 		{"QUISAC_SESSION_SECRET", c.Server.SessionSecret != ""},
+		{"DATABASE_URL", c.Database.URL != ""},
 	}
 	for _, r := range required {
 		if !r.set {

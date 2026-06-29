@@ -1,10 +1,5 @@
 package server
 
-// Add these two routes inside Handler() in server.go, alongside the existing ones:
-//
-//   mux.HandleFunc("/api/index", s.handleIndex)
-//   mux.HandleFunc("/api/graph/", s.handleGraph)  // note trailing slash — catches /api/graph/<id>
-
 import (
 	"context"
 	"encoding/json"

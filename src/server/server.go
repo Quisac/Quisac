@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
@@ -8,8 +9,10 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"quisac/src/config"
+	"quisac/src/db"
 	"quisac/src/github"
 	"quisac/src/session"
 )
@@ -19,15 +22,25 @@ const (
 	sessionCookie    = "quisac_session"
 )
 
+// SessionStore persists users and their sessions. It is satisfied by *db.Store
+// and injected into the server, so handlers can be exercised against a fake.
+type SessionStore interface {
+	UpsertUser(ctx context.Context, id int64, login string) error
+	CreateSession(ctx context.Context, s db.Session) error
+	GetSession(ctx context.Context, id string) (db.Session, error)
+	DeleteSession(ctx context.Context, id string) error
+}
+
 // Server holds the dependencies shared across HTTP handlers.
 type Server struct {
 	cfg    *config.Config
 	app    *github.App
 	signer *session.Signer
+	store  SessionStore
 }
 
-// New builds a Server from a resolved config.
-func New(cfg *config.Config) (*Server, error) {
+// New builds a Server from a resolved config and a session store.
+func New(cfg *config.Config, store SessionStore) (*Server, error) {
 	app, err := github.New(cfg.GitHub)
 	if err != nil {
 		return nil, err
@@ -36,6 +49,7 @@ func New(cfg *config.Config) (*Server, error) {
 		cfg:    cfg,
 		app:    app,
 		signer: session.NewSigner(cfg.Server.SessionSecret),
+		store:  store,
 	}, nil
 }
 
@@ -113,16 +127,20 @@ func (s *Server) handleCallback(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "authorization failed", http.StatusBadGateway)
 		return
 	}
-	login, _ := s.app.User(r.Context(), token)
+	userID, login, err := s.app.User(r.Context(), token)
+	if err != nil {
+		http.Error(w, "could not read user", http.StatusBadGateway)
+		return
+	}
+
+	installs, err := s.app.UserInstallations(r.Context(), token)
+	if err != nil {
+		http.Error(w, "could not read installations", http.StatusBadGateway)
+		return
+	}
 
 	installationID := q.Get("installation_id")
-
 	if installationID == "" {
-		installs, err := s.app.UserInstallations(r.Context(), token)
-		if err != nil {
-			http.Error(w, "could not read installations", http.StatusBadGateway)
-			return
-		}
 		if len(installs) == 0 {
 			s.startFlow(w, r, s.app.InstallURL)
 			return
@@ -132,7 +150,8 @@ func (s *Server) handleCallback(w http.ResponseWriter, r *http.Request) {
 
 	fmt.Printf("connected: installation=%s user=%s\n", installationID, login)
 
-	if err := s.setSession(w, r, sessionData{InstallationID: installationID, Login: login}); err != nil {
+	if err := s.startSession(r.Context(), w, r, userID, login, installationID); err != nil {
+		fmt.Println("start session error:", err)
 		http.Error(w, "could not create session", http.StatusInternalServerError)
 		return
 	}
@@ -168,8 +187,13 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// handleLogout clears the session cookie.
+// handleLogout deletes the persisted session and clears the cookie.
 func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
+	if c, err := r.Cookie(sessionCookie); err == nil {
+		if err := s.store.DeleteSession(r.Context(), c.Value); err != nil {
+			fmt.Println("delete session error:", err)
+		}
+	}
 	clearCookie(w, sessionCookie, s.secureCookies(r))
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -195,24 +219,39 @@ func (s *Server) handleRepos(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// sessionData is the payload carried in the signed session cookie.
+// sessionData is the session payload handlers consume.
 type sessionData struct {
-	InstallationID string `json:"installation_id"`
-	Login          string `json:"login"`
+	InstallationID string
+	Login          string
 }
 
-// setSession encodes sd as a signed cookie and writes it.
-func (s *Server) setSession(w http.ResponseWriter, r *http.Request, sd sessionData) error {
-	b, err := json.Marshal(sd)
+// sessionTTL is how long a persisted session stays valid.
+const sessionTTL = 7 * 24 * time.Hour
+
+// startSession upserts the user, persists a new session, and sets the cookie to
+// the opaque session token. The token is high-entropy, so the DB lookup is the
+// only check needed — no signing.
+func (s *Server) startSession(ctx context.Context, w http.ResponseWriter, r *http.Request, userID int64, login, installationID string) error {
+	if err := s.store.UpsertUser(ctx, userID, login); err != nil {
+		return err
+	}
+	token, err := randomState()
 	if err != nil {
 		return err
 	}
-	value := s.signer.Sign(base64.RawURLEncoding.EncodeToString(b))
+	if err := s.store.CreateSession(ctx, db.Session{
+		ID:             token,
+		UserID:         userID,
+		InstallationID: installationID,
+		ExpiresAt:      time.Now().Add(sessionTTL),
+	}); err != nil {
+		return err
+	}
 	http.SetCookie(w, &http.Cookie{
 		Name:     sessionCookie,
-		Value:    value,
+		Value:    token,
 		Path:     "/",
-		MaxAge:   7 * 24 * 3600,
+		MaxAge:   int(sessionTTL.Seconds()),
 		HttpOnly: true,
 		Secure:   s.secureCookies(r),
 		SameSite: http.SameSiteLaxMode,
@@ -220,25 +259,18 @@ func (s *Server) setSession(w http.ResponseWriter, r *http.Request, sd sessionDa
 	return nil
 }
 
-// session returns the verified session payload from the request's cookie.
+// session looks up the request's session token in the store. It returns false
+// for a missing, unknown, or expired session.
 func (s *Server) session(r *http.Request) (sessionData, bool) {
 	c, err := r.Cookie(sessionCookie)
 	if err != nil {
 		return sessionData{}, false
 	}
-	raw, ok := s.signer.Verify(c.Value)
-	if !ok {
-		return sessionData{}, false
-	}
-	b, err := base64.RawURLEncoding.DecodeString(raw)
+	sess, err := s.store.GetSession(r.Context(), c.Value)
 	if err != nil {
 		return sessionData{}, false
 	}
-	var sd sessionData
-	if err := json.Unmarshal(b, &sd); err != nil {
-		return sessionData{}, false
-	}
-	return sd, true
+	return sessionData{InstallationID: sess.InstallationID, Login: sess.Login}, true
 }
 
 // handleStatic serves the built frontend from html/dist.
