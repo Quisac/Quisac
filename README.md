@@ -9,5 +9,5 @@ make deploy
 ```
 
 ```
-    go run src/main.go --dir ../dir
+    go run ./cmd/quisac --dir ../dir
 ```

@@ -6,70 +6,74 @@ import (
 	"fmt"
 	"os"
 
-	"quisac/src/config"
-	"quisac/src/db"
-	"quisac/src/filewalk"
-	"quisac/src/server"
+	"quisac/internal/config"
+	"quisac/internal/db"
+	"quisac/internal/filewalk"
+	"quisac/internal/github"
+	"quisac/internal/graphstore"
+	"quisac/internal/ingest"
+	"quisac/internal/server"
 )
 
 func main() {
-	var (
-		dir     = flag.String("dir", "", "Repository directory to index")
-		serve   = flag.Bool("serve", false, "Start HTTP server")
-		repoURL = flag.String("repo-url", "", "Remote repository URL")
-	)
+	dir := flag.String("dir", "", "Index a local repository directory to html/graph.json")
+	serve := flag.Bool("serve", false, "Start the HTTP server")
 	flag.Parse()
 
-	if *serve {
-		cfg, err := config.Load()
-		if err != nil {
-			fmt.Println("config error:", err)
-			os.Exit(1)
-		}
+	switch {
+	case *serve:
+		runServer()
+	case *dir != "":
+		runDirIndex(*dir)
+	default:
+		fmt.Println("usage: quisac --serve | --dir <path>")
+		os.Exit(1)
+	}
+}
 
-		store, err := db.Open(context.Background(), cfg.Database.URL)
-		if err != nil {
-			fmt.Println("database error:", err)
-			os.Exit(1)
-		}
-		defer store.Close()
-
-		srv, err := server.New(cfg, store)
-		if err != nil {
-			fmt.Println("server error:", err)
-			os.Exit(1)
-		}
-		if err := srv.ListenAndServe(); err != nil {
-			fmt.Println("server error:", err)
-			os.Exit(1)
-		}
-		return
+func runServer() {
+	cfg, err := config.Load()
+	if err != nil {
+		exit("config", err)
 	}
 
-	if *dir != "" {
-		graph := filewalk.ReadRepo(*dir)
-		graph.Print()
-		json, err := graph.ToJSON()
-		if err != nil {
-			fmt.Println("json error:", err)
-			os.Exit(1)
-		}
-		if err := os.WriteFile("html/graph.json", []byte(json), 0o644); err != nil {
-			fmt.Println("write error:", err)
-			os.Exit(1)
-		}
-		fmt.Println("\ngraph.json written to html/")
-		return
+	ctx := context.Background()
+
+	store, err := db.Open(ctx, cfg.Database.URL)
+	if err != nil {
+		exit("database", err)
+	}
+	defer store.Close()
+
+	graphStore, err := graphstore.Open(ctx, cfg.Neo4j.URI, cfg.Neo4j.User, cfg.Neo4j.Password)
+	if err != nil {
+		exit("graph store", err)
+	}
+	defer graphStore.Close(ctx)
+
+	app, err := github.New(cfg.GitHub)
+	if err != nil {
+		exit("github", err)
 	}
 
-	if *repoURL != "" {
-		fmt.Println("repo-url cloning not yet implemented")
-		return
+	srv := server.New(cfg, store, app, ingest.New(app, graphStore))
+	if err := srv.ListenAndServe(); err != nil {
+		exit("server", err)
 	}
+}
 
-	fmt.Println("No mode selected.")
-	fmt.Println("  --serve")
-	fmt.Println("  --dir <path>")
-	fmt.Println("  --repo-url <url>")
+func runDirIndex(dir string) {
+	json, err := filewalk.ReadRepo(dir).ToJSON()
+	if err != nil {
+		exit("json", err)
+	}
+	if err := os.WriteFile("html/graph.json", []byte(json), 0o644); err != nil {
+		exit("write", err)
+	}
+	fmt.Println("graph.json written to html/")
+}
+
+func exit(what string, err error) {
+	fmt.Printf("%s error: %v\n", what, err)
 	os.Exit(1)
 }
