@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 
@@ -47,15 +48,30 @@ func NewWithStore(cfg *config.Config, ds *store.DatadogStore) *Server {
 	}
 }
 
+// handleGraph returns the dependency graph, as JSON, for the codebase most
+// recently indexed via `main --dir`. It reads the graph.json file written
+// alongside the frontend build; if indexing hasn't been run yet, this 404s.
+func (s *Server) handleGraph(w http.ResponseWriter, r *http.Request) {
+	data, err := os.ReadFile("html/graph.json")
+	if err != nil {
+		fmt.Println("read graph error:", err)
+		http.Error(w, "graph not found — run indexing first", http.StatusNotFound)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Write(data)
+}
+
 // Handler returns the router with all routes registered.
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
-	mux.HandleFunc("/api/connect", s.handleConnect)
-	mux.HandleFunc("/api/install", s.handleInstall)
-	mux.HandleFunc("/github/callback", s.handleCallback)
-	mux.HandleFunc("/api/me", s.handleMe)
-	mux.HandleFunc("/api/logout", s.handleLogout)
-	mux.HandleFunc("/api/repos", s.handleRepos)
+	// mux.HandleFunc("/api/connect", s.handleConnect)
+	// mux.HandleFunc("/api/install", s.handleInstall)
+	// mux.HandleFunc("/github/callback", s.handleCallback)
+	// mux.HandleFunc("/api/me", s.handleMe)
+	// mux.HandleFunc("/api/logout", s.handleLogout)
+	// mux.HandleFunc("/api/repos", s.handleRepos)
+	mux.HandleFunc("/api/graph", s.handleGraph)
 	mux.HandleFunc("/", s.handleStatic)
 	mux.HandleFunc("/datadog/webhook", s.handleDatadogWebhook)
 	mux.HandleFunc("/api/datadog/provision", s.handleDatadogProvision)
