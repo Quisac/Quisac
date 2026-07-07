@@ -6,7 +6,7 @@ import (
 	tree_sitter_go "github.com/tree-sitter/tree-sitter-go/bindings/go"
 	tree_sitter_javascript "github.com/tree-sitter/tree-sitter-javascript/bindings/go"
 	tree_sitter_python "github.com/tree-sitter/tree-sitter-python/bindings/go"
-	"quisac/src/astparsers"
+	"quisac/internal/astparsers"
 )
 
 func getLanguage(ext string) (*tree_sitter.Language, error) {

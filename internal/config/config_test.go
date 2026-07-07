@@ -28,8 +28,12 @@ GITHUB_APP_ID=12345
 GITHUB_REDIRECT_URL=http://localhost:8000/callback
 GITHUB_CLIENT_ID=test-client
 GITHUB_CLIENT_SECRET=test-secret
+GITHUB_WEBHOOK_SECRET=whsec
 QUISAC_SESSION_SECRET=session-secret
 DATABASE_URL=postgres://localhost:5432/quisac
+NEO4J_URI=neo4j://localhost:7687
+NEO4J_USER=neo4j
+NEO4J_PASSWORD=password
 GITHUB_APP_PRIVATE_KEY="`+key+`"
 PORT=8000
 `)
@@ -70,8 +74,12 @@ GITHUB_APP_ID=12345
 GITHUB_REDIRECT_URL=http://localhost:8000/callback
 GITHUB_CLIENT_ID=file-client
 GITHUB_CLIENT_SECRET=file-secret
+GITHUB_WEBHOOK_SECRET=whsec
 QUISAC_SESSION_SECRET=file-session
 DATABASE_URL=postgres://localhost:5432/quisac
+NEO4J_URI=neo4j://localhost:7687
+NEO4J_USER=neo4j
+NEO4J_PASSWORD=password
 `)
 
 	os.Setenv("GITHUB_APP_SLUG", "from-real-env")
@@ -109,8 +117,12 @@ GITHUB_APP_ID=12345
 GITHUB_REDIRECT_URL=http://localhost:8000/callback
 GITHUB_CLIENT_ID=test-client
 GITHUB_CLIENT_SECRET=test-secret
+GITHUB_WEBHOOK_SECRET=whsec
 QUISAC_SESSION_SECRET=session-secret
 DATABASE_URL=postgres://localhost:5432/quisac
+NEO4J_URI=neo4j://localhost:7687
+NEO4J_USER=neo4j
+NEO4J_PASSWORD=password
 `)
 
 	cfg, err := Load()

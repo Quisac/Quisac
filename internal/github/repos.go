@@ -214,6 +214,68 @@ func (a *App) DownloadRepo(
 	return tmpDir, cleanup, nil
 }
 
+// GetFileContent fetches a single file's contents at ref, without downloading
+// the whole repository. found is false when the file does not exist at ref
+// (deleted, or a directory/submodule). Files above GitHub's contents-API size
+// limit (~1MB) return an error and are treated as unfetchable by the caller.
+func (a *App) GetFileContent(ctx context.Context, installationID, fullName, path, ref string) ([]byte, bool, error) {
+	owner, repo, ok := splitFullName(fullName)
+	if !ok {
+		return nil, false, fmt.Errorf("GetFileContent: fullName must be owner/repo, got %q", fullName)
+	}
+
+	client, err := a.installClient(installationID)
+	if err != nil {
+		return nil, false, fmt.Errorf("GetFileContent: %w", err)
+	}
+
+	fileContent, _, resp, err := client.Repositories.GetContents(
+		ctx, owner, repo, path, &github.RepositoryContentGetOptions{Ref: ref},
+	)
+	if err != nil {
+		if resp != nil && resp.StatusCode == http.StatusNotFound {
+			return nil, false, nil
+		}
+		return nil, false, fmt.Errorf("GetFileContent: %s@%s: %w", path, ref, err)
+	}
+	if fileContent == nil {
+		// Path resolved to a directory or submodule, not a file.
+		return nil, false, nil
+	}
+
+	content, err := fileContent.GetContent()
+	if err != nil {
+		return nil, false, fmt.Errorf("GetFileContent: decode %s: %w", path, err)
+	}
+	return []byte(content), true, nil
+}
+
+// HeadSHA returns the commit SHA at the tip of the repository's default branch.
+// It's used to record which commit a full index corresponds to, so the
+// incremental (webhook) path can later detect drift.
+func (a *App) HeadSHA(ctx context.Context, installationID, fullName string) (string, error) {
+	owner, repo, ok := splitFullName(fullName)
+	if !ok {
+		return "", fmt.Errorf("HeadSHA: fullName must be owner/repo, got %q", fullName)
+	}
+
+	client, err := a.installClient(installationID)
+	if err != nil {
+		return "", fmt.Errorf("HeadSHA: %w", err)
+	}
+
+	r, _, err := client.Repositories.Get(ctx, owner, repo)
+	if err != nil {
+		return "", fmt.Errorf("HeadSHA: get repo: %w", err)
+	}
+
+	branch, _, err := client.Repositories.GetBranch(ctx, owner, repo, r.GetDefaultBranch(), 1)
+	if err != nil {
+		return "", fmt.Errorf("HeadSHA: get branch: %w", err)
+	}
+	return branch.GetCommit().GetSHA(), nil
+}
+
 func splitFullName(fullName string) (owner, repo string, ok bool) {
 	owner, repo, ok = strings.Cut(fullName, "/")
 	if !ok || owner == "" || repo == "" || strings.Contains(repo, "/") {

@@ -1,5 +1,5 @@
 [build]
-buildCommand = "CGO_ENABLED=1 go build -o out ./src/"
+buildCommand = "CGO_ENABLED=1 go build -o out ./cmd/quisac"
 
 [deploy]
 startCommand = "./out --serve"

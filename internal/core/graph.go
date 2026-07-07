@@ -2,9 +2,9 @@ package core
 
 import (
 	"encoding/json"
-	"fmt"
-	"quisac/src/astparsers"
 	"strings"
+
+	"quisac/internal/astparsers"
 )
 
 type Node struct {
@@ -19,15 +19,27 @@ type Edge struct {
 	Type string `json:"type"` // Imports | Contains | Calls | Instantiates | Inherits | Decorates
 }
 
+// Graph is an in-memory code graph. It is used both for a full repo index and
+// for a single-file subgraph during incremental updates.
 type Graph struct {
 	Nodes map[string]*Node `json:"nodes"`
 	Edges []Edge           `json:"edges"`
+
+	// RawImports maps a file's repo-relative path to its raw import strings. It
+	// feeds import resolution and is persisted so incremental updates can resolve
+	// without re-parsing unchanged files.
+	RawImports map[string][]string `json:"-"`
+
+	// edgeSet deduplicates Edges in O(1) as they are added.
+	edgeSet map[string]struct{}
 }
 
 func NewGraph() *Graph {
 	return &Graph{
-		Nodes: make(map[string]*Node),
-		Edges: make([]Edge, 0),
+		Nodes:      make(map[string]*Node),
+		Edges:      make([]Edge, 0),
+		RawImports: make(map[string][]string),
+		edgeSet:    make(map[string]struct{}),
 	}
 }
 
@@ -38,11 +50,11 @@ func (g *Graph) addNode(id, typ, name string) {
 }
 
 func (g *Graph) addEdge(from, to, typ string) {
-	for _, e := range g.Edges {
-		if e.From == from && e.To == to && e.Type == typ {
-			return
-		}
+	key := from + "\x00" + typ + "\x00" + to
+	if _, exists := g.edgeSet[key]; exists {
+		return
 	}
+	g.edgeSet[key] = struct{}{}
 	g.Edges = append(g.Edges, Edge{From: from, To: to, Type: typ})
 }
 
@@ -53,10 +65,16 @@ func methodID(path, qualified string) string { return "method:" + path + "::" + 
 func moduleID(name string) string            { return "module:" + name }
 func varID(path, name string) string         { return "var:" + path + "::" + name }
 
+// AddFile adds a parsed file's symbols and intra-file edges to the graph.
+// Cross-file import edges are added separately via AddImportEdge.
 func (g *Graph) AddFile(e *astparsers.Extracted) {
 	fp := e.FilePath
 
 	g.addNode(fileID(fp), "File", fp)
+
+	if len(e.Imports) > 0 {
+		g.RawImports[fp] = e.Imports
+	}
 
 	for _, imp := range e.Imports {
 		modName := firstToken(imp)
@@ -76,7 +94,6 @@ func (g *Graph) AddFile(e *astparsers.Extracted) {
 		}
 		child, parent := parts[0], parts[1]
 		childID := classID(fp, child)
-		// Parent might be external
 		parentID := classID(fp, parent)
 		if _, ok := g.Nodes[parentID]; !ok {
 			g.addNode(moduleID(parent), "Module", parent)
@@ -101,32 +118,27 @@ func (g *Graph) AddFile(e *astparsers.Extracted) {
 		g.addEdge(classID(fp, cls), mID, "Contains")
 	}
 
-	// Calls — attributed to their enclosing function/method, not the file.
+	// Calls are attributed to their enclosing function/method, not the file.
 	for _, c := range e.Calls {
 		fromID := g.scopeToID(fp, c.CallerScope)
-		var toID string
 		switch c.Kind {
 		case "method_call":
-			toID = methodID(fp, c.Target)
+			toID := methodID(fp, c.Target)
 			if g.Nodes[toID] == nil {
 				g.addNode(moduleID(c.Target), "Module", c.Target)
 				toID = moduleID(c.Target)
 			}
 			g.addEdge(fromID, toID, "Calls")
 		case "instantiation":
-			toID = resolveCall(fp, c.Target, g)
-			g.addEdge(fromID, toID, "Instantiates")
+			g.addEdge(fromID, resolveCall(fp, c.Target, g), "Instantiates")
 		default:
-			toID = resolveCall(fp, c.Target, g)
-			g.addEdge(fromID, toID, "Calls")
+			g.addEdge(fromID, resolveCall(fp, c.Target, g), "Calls")
 		}
 	}
 
-	// Decorators — emit Decorates edge to the specific function/method/class.
 	for _, d := range e.DecoratorUses {
 		g.addNode(moduleID(d.Name), "Module", d.Name)
-		toID := g.decoratorTargetID(fp, d.TargetScope)
-		g.addEdge(moduleID(d.Name), toID, "Decorates")
+		g.addEdge(moduleID(d.Name), g.decoratorTargetID(fp, d.TargetScope), "Decorates")
 	}
 
 	for _, v := range e.GlobalVariables {
@@ -135,6 +147,7 @@ func (g *Graph) AddFile(e *astparsers.Extracted) {
 	}
 }
 
+// AddImportEdge adds a resolved file→file import edge when the target exists.
 func (g *Graph) AddImportEdge(fromFile, toFile string) {
 	if _, ok := g.Nodes[fileID(toFile)]; !ok {
 		return
@@ -142,10 +155,29 @@ func (g *Graph) AddImportEdge(fromFile, toFile string) {
 	g.addEdge(fileID(fromFile), fileID(toFile), "Imports")
 }
 
+// PathFromID returns the repo-relative file path a node belongs to. IDs are
+// shaped "file:PATH", "class:PATH::Name", etc.; "module:Name" returns "".
+func PathFromID(id string) string {
+	i := strings.IndexByte(id, ':')
+	if i < 0 {
+		return ""
+	}
+	prefix, rest := id[:i], id[i+1:]
+	switch prefix {
+	case "module":
+		return ""
+	case "file":
+		return rest
+	default:
+		if j := strings.Index(rest, "::"); j >= 0 {
+			return rest[:j]
+		}
+		return rest
+	}
+}
+
 func (g *Graph) scopeToID(filePath, scope string) string {
 	switch {
-	case scope == "file":
-		return fileID(filePath)
 	case strings.HasPrefix(scope, "func:"):
 		return funcID(filePath, strings.TrimPrefix(scope, "func:"))
 	case strings.HasPrefix(scope, "method:"):
@@ -183,15 +215,8 @@ func resolveCall(filePath, name string, g *Graph) string {
 
 func firstToken(imp string) string {
 	imp = strings.TrimSpace(imp)
-	if strings.HasPrefix(imp, "from ") {
-		parts := strings.Fields(imp)
-		if len(parts) >= 2 {
-			return parts[1]
-		}
-	}
-	if strings.HasPrefix(imp, "import ") {
-		parts := strings.Fields(imp)
-		if len(parts) >= 2 {
+	if strings.HasPrefix(imp, "from ") || strings.HasPrefix(imp, "import ") {
+		if parts := strings.Fields(imp); len(parts) >= 2 {
 			return parts[1]
 		}
 	}
@@ -199,21 +224,9 @@ func firstToken(imp string) string {
 }
 
 func (g *Graph) ToJSON() (string, error) {
-	bytes, err := json.MarshalIndent(g, "", "  ")
+	b, err := json.MarshalIndent(g, "", "  ")
 	if err != nil {
 		return "", err
 	}
-	return string(bytes), nil
-}
-
-func (g *Graph) Print() {
-	fmt.Printf("Graph: %d nodes, %d edges\n\n", len(g.Nodes), len(g.Edges))
-	fmt.Println("Nodes:")
-	for _, node := range g.Nodes {
-		fmt.Printf("  [%s] %s (%s)\n", node.Type, node.Name, node.ID)
-	}
-	fmt.Println("\nEdges:")
-	for _, edge := range g.Edges {
-		fmt.Printf("  %s --[%s]--> %s\n", edge.From, edge.Type, edge.To)
-	}
+	return string(b), nil
 }

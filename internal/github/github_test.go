@@ -1,4 +1,4 @@
-package tests
+package github_test
 
 import (
 	"crypto/rand"
@@ -8,8 +8,8 @@ import (
 	"net/url"
 	"testing"
 
-	"quisac/src/config"
-	"quisac/src/github"
+	"quisac/internal/config"
+	"quisac/internal/github"
 )
 
 // testPrivateKey generates a throwaway RSA key in PEM form so github.New can

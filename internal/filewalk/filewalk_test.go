@@ -1,9 +1,9 @@
-package tests
+package filewalk_test
 
 import (
 	"os"
 	"path/filepath"
-	"quisac/src/filewalk"
+	"quisac/internal/filewalk"
 	"testing"
 )
 
@@ -44,10 +44,11 @@ def helper():
 		t.Errorf("Graph has no nodes")
 	}
 
-	// 4. Verify that the import resolution worked and created an edge
+	// 4. Verify that the import resolution worked and created an edge.
+	// Node IDs use repo-relative paths, so main.py imports utils.py.
 	hasImportEdge := false
 	for _, edge := range g.Edges {
-		if edge.Type == "Imports" && edge.From == "file:"+pyFile && edge.To == "file:"+utilsFile {
+		if edge.Type == "Imports" && edge.From == "file:main.py" && edge.To == "file:utils.py" {
 			hasImportEdge = true
 			break
 		}

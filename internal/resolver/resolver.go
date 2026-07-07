@@ -1,34 +1,40 @@
 package resolver
 
 import (
-	"os"
 	"path/filepath"
 	"strings"
 )
 
 // ResolveImport resolves a raw import string (as extracted by the AST parsers)
-// to an absolute file path within the repo. Returns "" for external dependencies
-// (npm packages, stdlib, PyPI) that don't exist in the repo.
+// to a repo-relative file path. Returns "" for external dependencies (npm
+// packages, stdlib, PyPI) that don't exist in the repo.
 //
-// repoRoot  — absolute path to the root of the monorepo
-// fromFile  — absolute path of the file that contains the import
+// files     — the set of repo-relative paths of every source file in the repo
+//
+//	(the "manifest"). Membership in this set is how we decide whether
+//	an import points at an internal file. This replaces hitting the
+//	filesystem, so resolution works identically for a freshly-walked
+//	tarball and for an incremental update where only the manifest
+//	(not the working tree) is available.
+//
+// fromFile  — repo-relative path of the file that contains the import
 // rawImport — the raw import text as captured by the AST parser
 // ext       — file extension of the importing file (.py, .js, .ts, etc.)
-func ResolveImport(repoRoot, fromFile, rawImport, ext string) string {
+func ResolveImport(files map[string]bool, fromFile, rawImport, ext string) string {
 	switch ext {
 	case ".py":
 		mod := parsePythonModule(rawImport)
 		if mod == "" {
 			return ""
 		}
-		return resolvePython(repoRoot, fromFile, mod)
+		return resolvePython(files, fromFile, mod)
 
 	case ".js", ".jsx", ".ts", ".tsx":
 		mod := parseJSModule(rawImport)
 		if mod == "" {
 			return ""
 		}
-		return resolveJS(repoRoot, fromFile, mod)
+		return resolveJS(files, fromFile, mod)
 	}
 	return ""
 }
@@ -50,7 +56,7 @@ func parsePythonModule(raw string) string {
 	return ""
 }
 
-func resolvePython(repoRoot, fromFile, module string) string {
+func resolvePython(files map[string]bool, fromFile, module string) string {
 	fromDir := filepath.Dir(fromFile)
 
 	if strings.HasPrefix(module, ".") {
@@ -67,25 +73,25 @@ func resolvePython(repoRoot, fromFile, module string) string {
 		for i := 1; i < dots; i++ {
 			base = filepath.Dir(base)
 		}
-		relPath := strings.ReplaceAll(rest, ".", string(filepath.Separator))
-		return tryPythonPaths(base, relPath)
+		relPath := strings.ReplaceAll(rest, ".", "/")
+		return tryPythonPaths(files, base, relPath)
 	}
 
 	// Absolute import — convert dot notation to path and try candidate locations.
-	modPath := strings.ReplaceAll(module, ".", string(filepath.Separator))
+	modPath := strings.ReplaceAll(module, ".", "/")
 
 	// 1. Directly from repo root (most common in monorepos)
-	if p := tryPythonPaths(repoRoot, modPath); p != "" {
+	if p := tryPythonPaths(files, "", modPath); p != "" {
 		return p
 	}
 	// 2. From common source roots used in Python monorepos
 	for _, srcDir := range []string{"src", "app", "lib", "backend"} {
-		if p := tryPythonPaths(filepath.Join(repoRoot, srcDir), modPath); p != "" {
+		if p := tryPythonPaths(files, srcDir, modPath); p != "" {
 			return p
 		}
 	}
 	// 3. Sibling directory of the importing file (for non-root-relative imports)
-	if p := tryPythonPaths(fromDir, modPath); p != "" {
+	if p := tryPythonPaths(files, fromDir, modPath); p != "" {
 		return p
 	}
 
@@ -93,18 +99,18 @@ func resolvePython(repoRoot, fromFile, module string) string {
 }
 
 // tryPythonPaths checks whether the module exists as a .py file or a package
-// (__init__.py) rooted at base/rel.
-func tryPythonPaths(base, rel string) string {
+// (__init__.py) rooted at base/rel, against the repo manifest.
+func tryPythonPaths(files map[string]bool, base, rel string) string {
 	candidate := base
 	if rel != "" {
 		candidate = filepath.Join(base, rel)
 	}
 	// Direct module file: services/user.py
-	if p := candidate + ".py"; fileExists(p) {
+	if p := norm(candidate + ".py"); files[p] {
 		return p
 	}
 	// Package directory: services/user/__init__.py
-	if p := filepath.Join(candidate, "__init__.py"); fileExists(p) {
+	if p := norm(filepath.Join(candidate, "__init__.py")); files[p] {
 		return p
 	}
 	return ""
@@ -140,7 +146,7 @@ func parseJSModule(raw string) string {
 // jsExts is the precedence order when probing for a file without an extension.
 var jsExts = []string{".ts", ".tsx", ".js", ".jsx"}
 
-func resolveJS(repoRoot, fromFile, module string) string {
+func resolveJS(files map[string]bool, fromFile, module string) string {
 	fromDir := filepath.Dir(fromFile)
 
 	var base string
@@ -158,28 +164,28 @@ func resolveJS(repoRoot, fromFile, module string) string {
 			// @scope/pkg → strip leading @ so we can try repoRoot/@scope/pkg
 			tryPath = strings.TrimPrefix(module, "@")
 		}
-		base = filepath.Join(repoRoot, tryPath)
+		base = tryPath
 	}
 
-	return tryJSPaths(base)
+	return tryJSPaths(files, base)
 }
 
-// tryJSPaths probes for a JS/TS file at the given base path, trying common
-// extension and index-file conventions.
-func tryJSPaths(base string) string {
+// tryJSPaths probes for a JS/TS file at the given base path against the repo
+// manifest, trying common extension and index-file conventions.
+func tryJSPaths(files map[string]bool, base string) string {
 	// Already a resolvable path with extension
-	if fileExists(base) {
-		return base
+	if p := norm(base); files[p] {
+		return p
 	}
 	// Try appending extensions: utils → utils.ts, utils.js, …
 	for _, ext := range jsExts {
-		if p := base + ext; fileExists(p) {
+		if p := norm(base + ext); files[p] {
 			return p
 		}
 	}
 	// Try as a directory's index file: utils/ → utils/index.ts, …
 	for _, ext := range jsExts {
-		if p := filepath.Join(base, "index"+ext); fileExists(p) {
+		if p := norm(filepath.Join(base, "index"+ext)); files[p] {
 			return p
 		}
 	}
@@ -188,7 +194,8 @@ func tryJSPaths(base string) string {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-func fileExists(path string) bool {
-	_, err := os.Stat(path)
-	return err == nil
+// norm canonicalizes a path to the forward-slash, cleaned form used as manifest
+// keys, so resolution matches regardless of the host separator.
+func norm(p string) string {
+	return filepath.ToSlash(filepath.Clean(p))
 }

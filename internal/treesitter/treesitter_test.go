@@ -1,7 +1,7 @@
-package tests
+package treesitter_test
 
 import (
-	"quisac/src/treesitter"
+	"quisac/internal/treesitter"
 	"testing"
 )
 

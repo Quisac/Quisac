@@ -12,10 +12,19 @@ type Config struct {
 	GitHub   GitHub
 	Server   Server
 	Database Database
+	Neo4j    Neo4j
 }
 
 type Database struct {
-	URL string // DATABASE_URL, e.g. postgres://user:pass@host:5432/quisac
+	URL string // DATABASE_URL, e.g. postgres://user:pass@hc
+}
+
+// Neo4j holds the connection settings for the code-graph store. For a local
+// Neo4j Desktop instance the URI is typically neo4j://localhost:7687.
+type Neo4j struct {
+	URI      string // NEO4J_URI
+	User     string // NEO4J_USER
+	Password string // NEO4J_PASSWORD
 }
 
 type GitHub struct {
@@ -63,6 +72,9 @@ func (c *Config) SetValuesFromEnv() {
 	setStringFromEnv("QUISAC_SESSION_SECRET", &c.Server.SessionSecret)
 	setStringFromEnv("PORT", &c.Server.Port)
 	setStringFromEnv("DATABASE_URL", &c.Database.URL)
+	setStringFromEnv("NEO4J_URI", &c.Neo4j.URI)
+	setStringFromEnv("NEO4J_USER", &c.Neo4j.User)
+	setStringFromEnv("NEO4J_PASSWORD", &c.Neo4j.Password)
 }
 
 func (c *Config) validate() error {
@@ -75,8 +87,12 @@ func (c *Config) validate() error {
 		{"GITHUB_REDIRECT_URL", c.GitHub.RedirectURL != ""},
 		{"GITHUB_CLIENT_ID", c.GitHub.OAuth.ClientID != ""},
 		{"GITHUB_CLIENT_SECRET", c.GitHub.OAuth.ClientSecret != ""},
+		{"GITHUB_WEBHOOK_SECRET", c.GitHub.App.WebhookSecret != ""},
 		{"QUISAC_SESSION_SECRET", c.Server.SessionSecret != ""},
 		{"DATABASE_URL", c.Database.URL != ""},
+		{"NEO4J_URI", c.Neo4j.URI != ""},
+		{"NEO4J_USER", c.Neo4j.User != ""},
+		{"NEO4J_PASSWORD", c.Neo4j.Password != ""},
 	}
 	for _, r := range required {
 		if !r.set {

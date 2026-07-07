@@ -11,10 +11,11 @@ import (
 	"strings"
 	"time"
 
-	"quisac/src/config"
-	"quisac/src/db"
-	"quisac/src/github"
-	"quisac/src/session"
+	"quisac/internal/config"
+	"quisac/internal/db"
+	"quisac/internal/github"
+	"quisac/internal/ingest"
+	"quisac/internal/session"
 )
 
 const (
@@ -33,24 +34,24 @@ type SessionStore interface {
 
 // Server holds the dependencies shared across HTTP handlers.
 type Server struct {
-	cfg    *config.Config
-	app    *github.App
-	signer *session.Signer
-	store  SessionStore
+	cfg     *config.Config
+	app     *github.App
+	signer  *session.Signer
+	store   SessionStore
+	indexer *ingest.Indexer
+	jobs    *jobStore
 }
 
-// New builds a Server from a resolved config and a session store.
-func New(cfg *config.Config, store SessionStore) (*Server, error) {
-	app, err := github.New(cfg.GitHub)
-	if err != nil {
-		return nil, err
-	}
+// New builds a Server from a resolved config and its dependencies.
+func New(cfg *config.Config, store SessionStore, app *github.App, indexer *ingest.Indexer) *Server {
 	return &Server{
-		cfg:    cfg,
-		app:    app,
-		signer: session.NewSigner(cfg.Server.SessionSecret),
-		store:  store,
-	}, nil
+		cfg:     cfg,
+		app:     app,
+		signer:  session.NewSigner(cfg.Server.SessionSecret),
+		store:   store,
+		indexer: indexer,
+		jobs:    newJobStore(),
+	}
 }
 
 // Handler returns the router with all routes registered.
@@ -58,6 +59,7 @@ func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/index", s.handleIndex)
 	mux.HandleFunc("/api/graph/", s.handleGraph)
+	mux.HandleFunc("/webhook", s.handleWebhook)
 	mux.HandleFunc("/api/connect", s.handleConnect)
 	mux.HandleFunc("/api/install", s.handleInstall)
 	mux.HandleFunc("/github/callback", s.handleCallback)
@@ -124,17 +126,24 @@ func (s *Server) handleCallback(w http.ResponseWriter, r *http.Request) {
 
 	token, err := s.app.ExchangeCode(r.Context(), code)
 	if err != nil {
+		fmt.Println("callback: exchange code error:", err)
 		http.Error(w, "authorization failed", http.StatusBadGateway)
+		return
+	}
+	if token == "" {
+		http.Error(w, "authorization failed: no user token", http.StatusBadGateway)
 		return
 	}
 	userID, login, err := s.app.User(r.Context(), token)
 	if err != nil {
+		fmt.Println("callback: read user error:", err)
 		http.Error(w, "could not read user", http.StatusBadGateway)
 		return
 	}
 
 	installs, err := s.app.UserInstallations(r.Context(), token)
 	if err != nil {
+		fmt.Println("callback: read installations error:", err)
 		http.Error(w, "could not read installations", http.StatusBadGateway)
 		return
 	}

@@ -1,9 +1,9 @@
-package tests
+package session_test
 
 import (
 	"testing"
 
-	"quisac/src/session"
+	"quisac/internal/session"
 )
 
 func TestSignVerifyRoundTrip(t *testing.T) {

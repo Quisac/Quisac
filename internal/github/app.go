@@ -10,14 +10,14 @@ import (
 	"golang.org/x/oauth2"
 	githuboauth "golang.org/x/oauth2/github"
 
-	"quisac/src/config"
+	"quisac/internal/config"
 )
 
 type App struct {
-	slug string
+	slug          string
 	appsTransport *ghinstallation.AppsTransport
-	oauth *oauth2.Config
-	http *http.Client
+	oauth         *oauth2.Config
+	http          *http.Client
 }
 
 func New(cfg config.GitHub) (*App, error) {
