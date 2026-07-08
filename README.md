@@ -1,13 +1,56 @@
 # Quisac
 
-```
-make dev
-make test
-make test/frontend/main
-make test/backend/main
-make deploy
-```
+## Run it with Docker (recommended for a fresh clone)
+
+Requires only Docker Desktop (or Docker Engine + compose).
 
 ```
-    go run ./cmd/quisac --dir ../dir
+cp .env.example .env
+# Edit .env and fill in the GitHub App + session values (see below).
+docker compose up --build      # or: make up
+```
+
+This starts three containers — **Postgres**, **Neo4j**, and the **app** — on one
+network. Postgres gets its schema from `internal/db/schema.sql` on first boot;
+Neo4j constraints are applied by the app itself. The app waits for both to be
+healthy before starting, then serves on http://localhost:8000.
+
+Stop everything with `make down`. Data persists in the `pgdata` / `neo4jdata`
+volumes; `docker compose down -v` wipes them.
+
+### What you still have to configure in `.env`
+
+Docker provisions the databases for you, but the app will not boot without a
+GitHub App (this is app-specific and can't be shipped in the repo):
+
+- `QUISAC_SESSION_SECRET` — any random string.
+- Register a GitHub App and set `GITHUB_APP_ID`, `GITHUB_APP_SLUG`,
+  `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET`, `GITHUB_WEBHOOK_SECRET`,
+  `GITHUB_APP_PRIVATE_KEY`, `GITHUB_REDIRECT_URL`.
+  - OAuth callback: `http://localhost:8000/github/callback`
+  - Webhook URL: `<public-host>/webhook` — for local dev, expose port 8000 with
+    a tunnel (e.g. ngrok) and use that host.
+
+You do **not** need to edit `DATABASE_URL` / `NEO4J_URI` for the Docker path —
+compose overrides them to point at the `postgres` / `neo4j` services.
+
+## Run it on the host (no Docker for the app)
+
+Needs Go 1.26+, Node 20, and a C compiler (CGO / tree-sitter). Start Postgres
+and Neo4j yourself, apply the Postgres schema, point `.env` at them, then:
+
+```
+psql "$DATABASE_URL" -f internal/db/schema.sql   # once, on a fresh database
+cd html && npm install && npm run build          # build the frontend
+make dev                                          # → http://localhost:8000
+```
+
+## Make targets
+
+```
+make up      — build + start the full Docker stack
+make down    — stop the Docker stack
+make dev     — run the server on the host (databases must already be up)
+make test    — run all Go tests
+make deploy  — push to main and deploy to Railway
 ```

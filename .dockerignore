@@ -1,0 +1,8 @@
+# Keep secrets and local build junk out of the image build context.
+.env
+.env.local
+.git
+out
+html/dist
+html/node_modules
+**/.DS_Store
