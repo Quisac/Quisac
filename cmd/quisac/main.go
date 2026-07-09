@@ -75,7 +75,7 @@ func runServer() {
 		exit("github", err)
 	}
 
-	pool := worker.New(store, ingest.New(app, graphStore), log, worker.Config{})
+	pool := worker.New(store, ingest.New(app, graphStore, log), log, worker.Config{})
 	srv := server.New(cfg, log, store, store, pool, app)
 	srv.AddReadinessCheck("postgres", store.Ping)
 	srv.AddReadinessCheck("neo4j", graphStore.Ping)

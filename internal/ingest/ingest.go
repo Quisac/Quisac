@@ -6,8 +6,8 @@ package ingest
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"path/filepath"
-	"sync"
 
 	"quisac/internal/core"
 	"quisac/internal/filewalk"
@@ -34,16 +34,20 @@ type GraphStore interface {
 	SetHead(ctx context.Context, repo, headSHA string) error
 }
 
-// Indexer builds full indexes and applies incremental updates. Updates for a
-// given repo are serialized so concurrent pushes can't interleave writes.
+// Indexer builds full indexes and applies incremental updates. Per-repo
+// serialization is enforced upstream by the durable job queue (at most one
+// running job per repo), so ProcessPush can assume it has no concurrent writer.
 type Indexer struct {
 	src   RepoSource
 	store GraphStore
-	locks keyedMutex
+	log   *slog.Logger
 }
 
-func New(src RepoSource, store GraphStore) *Indexer {
-	return &Indexer{src: src, store: store}
+func New(src RepoSource, store GraphStore, log *slog.Logger) *Indexer {
+	if log == nil {
+		log = slog.Default()
+	}
+	return &Indexer{src: src, store: store, log: log}
 }
 
 // FullIndex downloads repo, builds its graph, and persists it under headSHA
@@ -59,7 +63,7 @@ func (ix *Indexer) FullIndex(ctx context.Context, installationID, repo, headSHA 
 
 	if headSHA == "" {
 		if sha, err := ix.src.HeadSHA(ctx, installationID, repo); err != nil {
-			fmt.Printf("ingest: head sha lookup failed for %s: %v\n", repo, err)
+			ix.log.Warn("head sha lookup failed", "repo", repo, "err", err)
 		} else {
 			headSHA = sha
 		}
@@ -68,8 +72,8 @@ func (ix *Indexer) FullIndex(ctx context.Context, installationID, repo, headSHA 
 	if err := ix.store.SaveGraph(ctx, repo, headSHA, g); err != nil {
 		return nil, err
 	}
-	fmt.Printf("ingest: full index %s (head=%s, %d nodes, %d edges)\n",
-		repo, shortSHA(headSHA), len(g.Nodes), len(g.Edges))
+	ix.log.Info("full index", "repo", repo, "head", shortSHA(headSHA),
+		"nodes", len(g.Nodes), "edges", len(g.Edges))
 	return g, nil
 }
 
@@ -80,17 +84,14 @@ func (ix *Indexer) FullIndex(ctx context.Context, installationID, repo, headSHA 
 // changed is the raw union of paths a push touched; complete is false when the
 // webhook payload may have been truncated (too many commits).
 func (ix *Indexer) ProcessPush(ctx context.Context, installationID, repo, before, after string, changed []string, complete bool) error {
-	unlock := ix.locks.lock(repo)
-	defer unlock()
-
 	head, err := ix.store.GetHead(ctx, repo)
 	if err != nil {
 		return err
 	}
 
 	if head == "" || head != before || !complete {
-		fmt.Printf("ingest: %s full reindex → %s (head=%s before=%s complete=%v)\n",
-			repo, shortSHA(after), shortSHA(head), shortSHA(before), complete)
+		ix.log.Info("push → full reindex", "repo", repo, "after", shortSHA(after),
+			"head", shortSHA(head), "before", shortSHA(before), "complete", complete)
 		_, err := ix.FullIndex(ctx, installationID, repo, after)
 		return err
 	}
@@ -110,7 +111,7 @@ func (ix *Indexer) ProcessPush(ctx context.Context, installationID, repo, before
 	for _, path := range paths {
 		content, found, err := ix.src.GetFileContent(ctx, installationID, repo, path, after)
 		if err != nil {
-			fmt.Printf("ingest: %s fetch %s failed: %v\n", repo, path, err)
+			ix.log.Warn("fetch file failed", "repo", repo, "path", path, "err", err)
 			continue // transient — leave this file as-is
 		}
 		if !found || len(content) > filewalk.MaxFileBytes {
@@ -126,7 +127,7 @@ func (ix *Indexer) ProcessPush(ctx context.Context, installationID, repo, before
 
 		sub, err := filewalk.ParseFile(path, content)
 		if err != nil {
-			fmt.Printf("ingest: %s parse %s failed: %v\n", repo, path, err)
+			ix.log.Warn("parse file failed", "repo", repo, "path", path, "err", err)
 			if manifest[path] {
 				structural = true
 				delete(manifest, path)
@@ -153,8 +154,8 @@ func (ix *Indexer) ProcessPush(ctx context.Context, installationID, repo, before
 	if err := ix.store.SetHead(ctx, repo, after); err != nil {
 		return err
 	}
-	fmt.Printf("ingest: %s incremental %s→%s (%d changed, structural=%v)\n",
-		repo, shortSHA(before), shortSHA(after), len(paths), structural)
+	ix.log.Info("push → incremental", "repo", repo, "before", shortSHA(before),
+		"after", shortSHA(after), "changed", len(paths), "structural", structural)
 	return nil
 }
 
@@ -218,26 +219,4 @@ func shortSHA(sha string) string {
 		return sha[:7]
 	}
 	return sha
-}
-
-// keyedMutex provides a lock per string key.
-type keyedMutex struct {
-	mu    sync.Mutex
-	locks map[string]*sync.Mutex
-}
-
-func (k *keyedMutex) lock(key string) (unlock func()) {
-	k.mu.Lock()
-	if k.locks == nil {
-		k.locks = map[string]*sync.Mutex{}
-	}
-	m, ok := k.locks[key]
-	if !ok {
-		m = &sync.Mutex{}
-		k.locks[key] = m
-	}
-	k.mu.Unlock()
-
-	m.Lock()
-	return m.Unlock
 }

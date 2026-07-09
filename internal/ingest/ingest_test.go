@@ -101,7 +101,7 @@ func TestProcessPush_ModifyOnlyIsSurgical(t *testing.T) {
 		"main.py": "from utils import helper\n\ndef main():\n    helper()\n",
 	}}
 
-	ix := ingest.New(src, store)
+	ix := ingest.New(src, store, nil)
 	err := ix.ProcessPush(context.Background(), "1", "o/r", "sha1", "sha2",
 		[]string{"main.py"}, true)
 	if err != nil {
@@ -135,7 +135,7 @@ func TestProcessPush_AddedFileIsStructural(t *testing.T) {
 		"utils.py": "def helper():\n    pass\n",
 	}}
 
-	ix := ingest.New(src, store)
+	ix := ingest.New(src, store, nil)
 	if err := ix.ProcessPush(context.Background(), "1", "o/r", "sha1", "sha2",
 		[]string{"utils.py"}, true); err != nil {
 		t.Fatalf("ProcessPush: %v", err)
@@ -154,7 +154,7 @@ func TestProcessPush_DriftFallsBackToFullIndex(t *testing.T) {
 	store.head = "sha1"
 	src := &fakeSource{files: map[string]string{}}
 
-	ix := ingest.New(src, store)
+	ix := ingest.New(src, store, nil)
 	// before != stored head → drift → FullIndex → DownloadRepo (our fake errors).
 	err := ix.ProcessPush(context.Background(), "1", "o/r", "STALE", "sha2", []string{"x.py"}, true)
 	if err == nil {
@@ -170,7 +170,7 @@ func TestProcessPush_NoIndexableChangesJustBumpsHead(t *testing.T) {
 	store.head = "sha1"
 	src := &fakeSource{files: map[string]string{}}
 
-	ix := ingest.New(src, store)
+	ix := ingest.New(src, store, nil)
 	if err := ix.ProcessPush(context.Background(), "1", "o/r", "sha1", "sha2",
 		[]string{"README.md", "docs/guide.md"}, true); err != nil {
 		t.Fatalf("ProcessPush: %v", err)
