@@ -5,7 +5,8 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
-	"fmt"
+	"expvar"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
@@ -14,7 +15,6 @@ import (
 	"quisac/internal/config"
 	"quisac/internal/db"
 	"quisac/internal/github"
-	"quisac/internal/ingest"
 	"quisac/internal/session"
 )
 
@@ -32,29 +32,47 @@ type SessionStore interface {
 	DeleteSession(ctx context.Context, id string) error
 }
 
+// JobQueue is the durable async-work store the server enqueues into and polls.
+// Satisfied by *db.Store.
+type JobQueue interface {
+	EnqueueJob(ctx context.Context, j db.Job) error
+	GetIndexJob(ctx context.Context, id string, userID int64) (db.IndexJobResult, error)
+	CountActiveIndexJobs(ctx context.Context, userID int64) (int, error)
+}
+
+// Waker nudges the worker pool to pick up freshly enqueued work without waiting
+// for its next poll. Satisfied by *worker.Pool.
+type Waker interface {
+	Wake()
+}
+
 // Server holds the dependencies shared across HTTP handlers.
 type Server struct {
-	cfg     *config.Config
-	app     *github.App
-	signer  *session.Signer
-	store   SessionStore
-	indexer *ingest.Indexer
-	jobs    *jobStore
+	cfg    *config.Config
+	log    *slog.Logger
+	app    *github.App
+	signer *session.Signer
+	store  SessionStore
+	queue  JobQueue
+	waker  Waker
+	checks []readinessCheck
 }
 
 // New builds a Server from a resolved config and its dependencies.
-func New(cfg *config.Config, store SessionStore, app *github.App, indexer *ingest.Indexer) *Server {
+func New(cfg *config.Config, log *slog.Logger, store SessionStore, queue JobQueue, waker Waker, app *github.App) *Server {
 	return &Server{
-		cfg:     cfg,
-		app:     app,
-		signer:  session.NewSigner(cfg.Server.SessionSecret),
-		store:   store,
-		indexer: indexer,
-		jobs:    newJobStore(),
+		cfg:    cfg,
+		log:    log,
+		app:    app,
+		signer: session.NewSigner(cfg.Server.SessionSecret),
+		store:  store,
+		queue:  queue,
+		waker:  waker,
 	}
 }
 
-// Handler returns the router with all routes registered.
+// Handler returns the router with all routes registered, wrapped in the
+// request-id and access-log middleware.
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/index", s.handleIndex)
@@ -66,15 +84,11 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/me", s.handleMe)
 	mux.HandleFunc("/api/logout", s.handleLogout)
 	mux.HandleFunc("/api/repos", s.handleRepos)
+	mux.HandleFunc("/healthz", s.handleHealthz)
+	mux.HandleFunc("/readyz", s.handleReadyz)
+	mux.Handle("/debug/vars", expvar.Handler())
 	mux.HandleFunc("/", s.handleStatic)
-	return mux
-}
-
-// ListenAndServe starts the HTTP server on the configured port.
-func (s *Server) ListenAndServe() error {
-	port := s.cfg.Server.Port
-	fmt.Printf("serving → http://localhost:%s\n", port)
-	return http.ListenAndServe(":"+port, s.Handler())
+	return s.withRequestID(s.withLogging(mux))
 }
 
 // handleConnect starts the connect flow via OAuth authorize.
@@ -126,7 +140,7 @@ func (s *Server) handleCallback(w http.ResponseWriter, r *http.Request) {
 
 	token, err := s.app.ExchangeCode(r.Context(), code)
 	if err != nil {
-		fmt.Println("callback: exchange code error:", err)
+		s.logf(r).Error("oauth: exchange code", "err", err)
 		http.Error(w, "authorization failed", http.StatusBadGateway)
 		return
 	}
@@ -136,14 +150,14 @@ func (s *Server) handleCallback(w http.ResponseWriter, r *http.Request) {
 	}
 	userID, login, err := s.app.User(r.Context(), token)
 	if err != nil {
-		fmt.Println("callback: read user error:", err)
+		s.logf(r).Error("oauth: read user", "err", err)
 		http.Error(w, "could not read user", http.StatusBadGateway)
 		return
 	}
 
 	installs, err := s.app.UserInstallations(r.Context(), token)
 	if err != nil {
-		fmt.Println("callback: read installations error:", err)
+		s.logf(r).Error("oauth: read installations", "err", err)
 		http.Error(w, "could not read installations", http.StatusBadGateway)
 		return
 	}
@@ -157,10 +171,10 @@ func (s *Server) handleCallback(w http.ResponseWriter, r *http.Request) {
 		installationID = strconv.FormatInt(installs[0].ID, 10)
 	}
 
-	fmt.Printf("connected: installation=%s user=%s\n", installationID, login)
+	s.logf(r).Info("connected", "installation", installationID, "user", login)
 
 	if err := s.startSession(r.Context(), w, r, userID, login, installationID); err != nil {
-		fmt.Println("start session error:", err)
+		s.logf(r).Error("start session", "err", err)
 		http.Error(w, "could not create session", http.StatusInternalServerError)
 		return
 	}
@@ -200,7 +214,7 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 	if c, err := r.Cookie(sessionCookie); err == nil {
 		if err := s.store.DeleteSession(r.Context(), c.Value); err != nil {
-			fmt.Println("delete session error:", err)
+			s.logf(r).Error("delete session", "err", err)
 		}
 	}
 	clearCookie(w, sessionCookie, s.secureCookies(r))
@@ -217,19 +231,20 @@ func (s *Server) handleRepos(w http.ResponseWriter, r *http.Request) {
 
 	repos, err := s.app.Repositories(r.Context(), sd.InstallationID)
 	if err != nil {
-		fmt.Println("list repos error:", err)
+		s.logf(r).Error("list repos", "err", err)
 		http.Error(w, "could not list repositories", http.StatusBadGateway)
 		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(repos); err != nil {
-		fmt.Println("encode repos error:", err)
+		s.logf(r).Error("encode repos", "err", err)
 	}
 }
 
 // sessionData is the session payload handlers consume.
 type sessionData struct {
+	UserID         int64
 	InstallationID string
 	Login          string
 }
@@ -279,7 +294,7 @@ func (s *Server) session(r *http.Request) (sessionData, bool) {
 	if err != nil {
 		return sessionData{}, false
 	}
-	return sessionData{InstallationID: sess.InstallationID, Login: sess.Login}, true
+	return sessionData{UserID: sess.UserID, InstallationID: sess.InstallationID, Login: sess.Login}, true
 }
 
 // handleStatic serves the built frontend from html/dist.

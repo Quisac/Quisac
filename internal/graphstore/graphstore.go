@@ -77,6 +77,11 @@ func (s *Store) Close(ctx context.Context) error {
 	return s.driver.Close(ctx)
 }
 
+// Ping verifies connectivity to Neo4j. Used by the readiness probe.
+func (s *Store) Ping(ctx context.Context) error {
+	return s.driver.VerifyConnectivity(ctx)
+}
+
 func (s *Store) ensureSchema(ctx context.Context) error {
 	return s.write(ctx, func(tx neo4j.ManagedTransaction) error {
 		for _, stmt := range []string{

@@ -1,8 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import ForceGraph2D from 'react-force-graph-2d'
 
-// Node colours — validated categorical palette for a dark canvas (see dataviz).
-// Module is intentionally neutral: external deps recede into the background.
 const TYPE_COLOR = {
   File: '#3987e5',
   Class: '#e66767',

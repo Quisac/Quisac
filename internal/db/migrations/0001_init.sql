@@ -1,3 +1,5 @@
+-- Users and their sessions. The session id is the opaque token stored in the
+-- browser cookie; all session truth lives here, not in the cookie.
 
 CREATE TABLE IF NOT EXISTS users (
     id         BIGINT      PRIMARY KEY,            -- GitHub user id

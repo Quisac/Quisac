@@ -11,9 +11,9 @@ docker compose up --build      # or: make up
 ```
 
 This starts three containers — **Postgres**, **Neo4j**, and the **app** — on one
-network. Postgres gets its schema from `internal/db/schema.sql` on first boot;
-Neo4j constraints are applied by the app itself. The app waits for both to be
-healthy before starting, then serves on http://localhost:8000.
+network. The app applies its Postgres schema migrations on boot (so it also
+works against managed Postgres), and Neo4j constraints too. The app waits for
+both to be healthy before starting, then serves on http://localhost:8000.
 
 Stop everything with `make down`. Data persists in the `pgdata` / `neo4jdata`
 volumes; `docker compose down -v` wipes them.
@@ -37,13 +37,14 @@ compose overrides them to point at the `postgres` / `neo4j` services.
 ## Run it on the host (no Docker for the app)
 
 Needs Go 1.26+, Node 20, and a C compiler (CGO / tree-sitter). Start Postgres
-and Neo4j yourself, apply the Postgres schema, point `.env` at them, then:
+and Neo4j yourself, point `.env` at them, then:
 
 ```
-psql "$DATABASE_URL" -f internal/db/schema.sql   # once, on a fresh database
 cd html && npm install && npm run build          # build the frontend
 make dev                                          # → http://localhost:8000
 ```
+
+The app runs its schema migrations automatically on boot; no manual `psql` step.
 
 ## Make targets
 

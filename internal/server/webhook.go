@@ -6,12 +6,13 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"fmt"
 	"io"
 	"net/http"
 	"strconv"
 	"strings"
-	"time"
+
+	"quisac/internal/db"
+	"quisac/internal/worker"
 )
 
 // maxWebhookBody caps the payload we read (GitHub deliveries are ≤25 MiB).
@@ -63,32 +64,56 @@ func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "bad payload", http.StatusBadRequest)
 			return
 		}
-		go s.processPush(evt)
+		if err := s.enqueuePush(r.Context(), evt); err != nil {
+			// Fail the delivery so GitHub retries; the push is not yet durable.
+			s.logf(r).Error("enqueue push", "err", err, "repo", evt.Repository.FullName)
+			http.Error(w, "could not enqueue", http.StatusInternalServerError)
+			return
+		}
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// processPush validates the push targets the default branch and forwards it to
-// the indexer.
-func (s *Server) processPush(evt pushEvent) {
+// enqueuePush durably queues a push for incremental processing. Irrelevant
+// events (non-default-branch, missing repo/installation) are dropped without
+// error so GitHub does not retry them. Only a real enqueue failure returns an
+// error, which the caller turns into a non-2xx so GitHub retries.
+func (s *Server) enqueuePush(ctx context.Context, evt pushEvent) error {
 	repo := evt.Repository.FullName
 	if repo == "" || evt.Installation.ID == 0 {
-		return
+		return nil
 	}
 	if evt.Ref != "refs/heads/"+evt.Repository.DefaultBranch {
-		return
+		return nil
 	}
 
-	installID := strconv.FormatInt(evt.Installation.ID, 10)
-	complete := len(evt.Commits) < commitsCap
-	changed := changedPaths(evt)
-
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
-	defer cancel()
-
-	if err := s.indexer.ProcessPush(ctx, installID, repo, evt.Before, evt.After, changed, complete); err != nil {
-		fmt.Printf("webhook %s: %v\n", repo, err)
+	payload, err := json.Marshal(worker.PushPayload{
+		Before:   evt.Before,
+		After:    evt.After,
+		Changed:  changedPaths(evt),
+		Complete: len(evt.Commits) < commitsCap,
+	})
+	if err != nil {
+		return err
 	}
+
+	jobID, err := randomState()
+	if err != nil {
+		return err
+	}
+	jobID = jobID[:16]
+
+	if err := s.queue.EnqueueJob(ctx, db.Job{
+		ID:             jobID,
+		Kind:           db.JobPush,
+		Repo:           repo,
+		InstallationID: strconv.FormatInt(evt.Installation.ID, 10),
+		Payload:        payload,
+	}); err != nil {
+		return err
+	}
+	s.waker.Wake()
+	return nil
 }
 
 // changedPaths is the de-duplicated union of files touched across the commits.

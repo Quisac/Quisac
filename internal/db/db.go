@@ -1,6 +1,6 @@
 // Package db is the PostgreSQL persistence layer for Quisac. It owns a pgx
-// connection pool and the queries the server needs. The schema lives in
-// schema.sql and is applied out-of-band (docker compose, see the project root).
+// connection pool and the queries the server needs. The schema lives in the
+// embedded migrations/ directory and is applied on boot by Store.Migrate.
 package db
 
 import (
@@ -38,6 +38,11 @@ func Open(ctx context.Context, url string) (*Store, error) {
 		return nil, fmt.Errorf("db: ping: %w", err)
 	}
 	return &Store{pool: pool}, nil
+}
+
+// Ping verifies the pool can reach Postgres. Used by the readiness probe.
+func (s *Store) Ping(ctx context.Context) error {
+	return s.pool.Ping(ctx)
 }
 
 // Close releases the pool. Safe to call on a nil Store.

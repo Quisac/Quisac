@@ -1,64 +1,22 @@
 package server
 
 import (
-	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
-	"sync"
-	"time"
+
+	"quisac/internal/db"
 )
 
-type jobStatus string
-
-const (
-	jobPending jobStatus = "pending"
-	jobDone    jobStatus = "done"
-	jobFailed  jobStatus = "failed"
-)
-
-type indexJob struct {
-	Status    jobStatus
-	GraphJSON string
-	Error     string
-	StartedAt time.Time
-}
-
-// jobStore tracks async index jobs so the browser can poll for completion.
-type jobStore struct {
-	mu   sync.RWMutex
-	jobs map[string]*indexJob
-}
-
-func newJobStore() *jobStore { return &jobStore{jobs: map[string]*indexJob{}} }
-
-func (js *jobStore) set(id string, j *indexJob) {
-	js.mu.Lock()
-	js.jobs[id] = j
-	js.mu.Unlock()
-}
-
-func (js *jobStore) update(id string, fn func(*indexJob)) {
-	js.mu.Lock()
-	if j, ok := js.jobs[id]; ok {
-		fn(j)
-	}
-	js.mu.Unlock()
-}
-
-func (js *jobStore) get(id string) (indexJob, bool) {
-	js.mu.RLock()
-	defer js.mu.RUnlock()
-	j, ok := js.jobs[id]
-	if !ok {
-		return indexJob{}, false
-	}
-	return *j, true
-}
+// maxActiveIndexJobs caps how many full-index jobs a single user may have
+// pending or running at once — a simple per-user rate limit that stops one user
+// from queuing unbounded expensive work.
+const maxActiveIndexJobs = 3
 
 // handleIndex enqueues a full index of a repo and returns a job id (202). The
-// work runs in the background so the browser never waits on a long operation.
+// work is picked up by the worker pool; the browser polls /api/graph/{id}.
 func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -78,63 +36,77 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Rate limit: reject when the user already has too much in-flight work.
+	active, err := s.queue.CountActiveIndexJobs(r.Context(), sd.UserID)
+	if err != nil {
+		s.logf(r).Error("count active index jobs", "err", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	if active >= maxActiveIndexJobs {
+		http.Error(w, "too many in-flight index jobs; try again shortly", http.StatusTooManyRequests)
+		return
+	}
+
 	jobID, err := randomState()
 	if err != nil {
 		http.Error(w, "could not create job", http.StatusInternalServerError)
 		return
 	}
 	jobID = jobID[:16]
-	s.jobs.set(jobID, &indexJob{Status: jobPending, StartedAt: time.Now()})
 
-	installID, repo := sd.InstallationID, body.Repo
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
-		defer cancel()
-
-		g, err := s.indexer.FullIndex(ctx, installID, repo, "")
-		if err != nil {
-			fmt.Printf("index job %s: %v\n", jobID, err)
-			s.jobs.update(jobID, func(j *indexJob) { j.Status, j.Error = jobFailed, err.Error() })
-			return
-		}
-		gj, err := g.ToJSON()
-		if err != nil {
-			s.jobs.update(jobID, func(j *indexJob) { j.Status, j.Error = jobFailed, err.Error() })
-			return
-		}
-		s.jobs.update(jobID, func(j *indexJob) { j.Status, j.GraphJSON = jobDone, gj })
-	}()
+	if err := s.queue.EnqueueJob(r.Context(), db.Job{
+		ID:             jobID,
+		Kind:           db.JobFullIndex,
+		Repo:           body.Repo,
+		InstallationID: sd.InstallationID,
+		UserID:         sd.UserID,
+	}); err != nil {
+		s.logf(r).Error("enqueue index job", "err", err, "repo", body.Repo)
+		http.Error(w, "could not enqueue job", http.StatusInternalServerError)
+		return
+	}
+	s.waker.Wake()
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusAccepted)
 	json.NewEncoder(w).Encode(map[string]string{"jobId": jobID})
 }
 
-// handleGraph reports an index job's status and, when done, its graph.
+// handleGraph reports an index job's status and, when done, its graph. The job
+// is scoped to the requesting user, so one user cannot read another's result.
 func (s *Server) handleGraph(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	if _, ok := s.session(r); !ok {
+	sd, ok := s.session(r)
+	if !ok {
 		http.Error(w, "not connected", http.StatusUnauthorized)
 		return
 	}
 
 	jobID := strings.TrimPrefix(r.URL.Path, "/api/graph/")
-	job, ok := s.jobs.get(jobID)
-	if !ok {
-		http.Error(w, "job not found", http.StatusNotFound)
+	res, err := s.queue.GetIndexJob(r.Context(), jobID, sd.UserID)
+	if err != nil {
+		if errors.Is(err, db.ErrNotFound) {
+			http.Error(w, "job not found", http.StatusNotFound)
+			return
+		}
+		s.logf(r).Error("get index job", "err", err, "job", jobID)
+		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	switch job.Status {
-	case jobFailed:
+	switch res.Status {
+	case db.StatusFailed:
+		// The detailed error is logged by the worker; the client sees a generic
+		// message so internal paths and driver detail never leak.
 		w.WriteHeader(http.StatusInternalServerError)
-		json.NewEncoder(w).Encode(map[string]string{"status": "failed", "error": job.Error})
-	case jobDone:
-		fmt.Fprintf(w, `{"status":"done","graph":%s}`, job.GraphJSON)
+		json.NewEncoder(w).Encode(map[string]string{"status": "failed", "error": "indexing failed"})
+	case db.StatusDone:
+		fmt.Fprintf(w, `{"status":"done","graph":%s}`, res.Graph)
 	default:
 		json.NewEncoder(w).Encode(map[string]string{"status": "pending"})
 	}

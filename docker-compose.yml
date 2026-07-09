@@ -8,8 +8,8 @@ services:
       POSTGRES_DB: ${POSTGRES_DB:?set POSTGRES_DB in .env}
     volumes:
       - pgdata:/var/lib/postgresql/data
-      # Applied only on first boot, i.e. when the pgdata volume is empty.
-      - ./internal/db/schema.sql:/docker-entrypoint-initdb.d/schema.sql:ro
+      # Schema is applied by the app on boot (Store.Migrate), not here — so it
+      # also works against managed Postgres where initdb hooks never run.
     ports:
       - "5432:5432"
     healthcheck:
@@ -20,7 +20,9 @@ services:
 
   neo4j:
     image: neo4j:5
-    env_file: .env
+    # NOTE: do NOT use `env_file: .env` here. Neo4j 5 treats every NEO4J_*
+    # env var as a config setting (NEO4J_URI -> setting "URI") and aborts on
+    # strict validation. Those vars are for the app; pass Neo4j only what it needs.
     environment:
       NEO4J_AUTH: ${NEO4J_USER:?set NEO4J_USER in .env}/${NEO4J_PASSWORD:?set NEO4J_PASSWORD in .env}
     volumes:
@@ -29,7 +31,7 @@ services:
       - "7474:7474"   # HTTP / browser UI
       - "7687:7687"   # Bolt
     healthcheck:
-      test: ["CMD-SHELL", "cypher-shell -u $$NEO4J_USER -p $$NEO4J_PASSWORD 'RETURN 1' >/dev/null 2>&1 || exit 1"]
+      test: ["CMD-SHELL", "cypher-shell -u ${NEO4J_USER} -p ${NEO4J_PASSWORD} 'RETURN 1' >/dev/null 2>&1 || exit 1"]
       interval: 5s
       timeout: 10s
       retries: 20

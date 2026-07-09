@@ -2,17 +2,13 @@ package db
 
 import (
 	"context"
-	_ "embed"
 	"os"
 	"testing"
 	"time"
 )
 
-//go:embed schema.sql
-var schemaSQL string
-
-// newTestStore connects to TEST_DATABASE_URL, applies the schema, and clears the
-// session/user tables. The test is skipped when the variable is unset, so plain
+// newTestStore connects to TEST_DATABASE_URL, applies migrations, and clears the
+// tables. The test is skipped when the variable is unset, so plain
 // `go test ./...` needs no database.
 func newTestStore(t *testing.T) *Store {
 	t.Helper()
@@ -27,10 +23,10 @@ func newTestStore(t *testing.T) *Store {
 	t.Cleanup(store.Close)
 
 	ctx := context.Background()
-	if _, err := store.pool.Exec(ctx, schemaSQL); err != nil {
-		t.Fatalf("apply schema: %v", err)
+	if err := store.Migrate(ctx); err != nil {
+		t.Fatalf("migrate: %v", err)
 	}
-	if _, err := store.pool.Exec(ctx, `TRUNCATE sessions, users CASCADE`); err != nil {
+	if _, err := store.pool.Exec(ctx, `TRUNCATE jobs, sessions, users CASCADE`); err != nil {
 		t.Fatalf("truncate: %v", err)
 	}
 	return store

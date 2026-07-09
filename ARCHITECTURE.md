@@ -36,10 +36,14 @@ downstream incident-resolution features (graph traversal, blast-radius, etc.).
 ## Package layout
 
 ```
-cmd/quisac         entrypoint (--serve | --dir)
+cmd/quisac         entrypoint (--serve | --dir); wires deps, runs the HTTP
+                   server + worker pool, handles graceful shutdown.
 internal/
   server           HTTP transport only: routing, OAuth flow, webhook verify,
-                   async index jobs. No graph logic.
+                   enqueue jobs, poll results, health/readiness, access logs.
+                   No graph logic.
+  worker           drains the durable job queue: claims jobs, runs them through
+                   ingest, records outcomes; reaps stale jobs and evicts old ones.
   ingest           orchestration: FullIndex + ProcessPush. Depends only on the
                    RepoSource and GraphStore interfaces it declares.
   github           GitHub App client: DownloadRepo, GetFileContent, HeadSHA,
@@ -51,9 +55,35 @@ internal/
   resolver         import string → repo-relative path, against a file manifest.
   treesitter       tree-sitter parsing → astparsers.Extracted.
   astparsers       language-specific symbol/edge extraction (py/js/ts/go).
-  config           env config.        db  Postgres (users/sessions).
+  config           env config.        db  Postgres (users/sessions/jobs +
+                                          embedded migrations).
   session          signed-cookie helper.
 ```
+
+## Async work: durable queue + worker pool
+
+Full indexes (user-initiated) and push updates (webhook-driven) are **durable
+jobs** in the Postgres `jobs` table, not in-process goroutines. The server only
+enqueues; a pool of workers claims and runs them. This survives restarts and
+scales horizontally:
+
+- **Crash-safe.** A job persists before its HTTP request is acked (webhooks get a
+  non-2xx and retry if the enqueue fails). A worker that dies mid-job leaves the
+  row `running`; the maintenance loop reaps it back to `pending` after a
+  threshold that exceeds the job timeout, so live work is never reaped.
+- **Serialized per repo, across replicas.** The partial unique index
+  `jobs_one_running_per_repo` guarantees at most one `running` job per repo; the
+  claim query (`FOR UPDATE SKIP LOCKED` + a not-running-for-this-repo filter)
+  lets different repos run in parallel on any number of workers/replicas.
+- **Retries + eviction.** Failures return to `pending` until `max_attempts`, then
+  terminal `failed`; terminal jobs older than a TTL are deleted.
+- **Rate limited.** A user may have at most `maxActiveIndexJobs` full-index jobs
+  in flight, so one user can't queue unbounded expensive work.
+
+Schema lives in `internal/db/migrations/*.sql`, applied on boot by `Store.Migrate`
+(advisory-locked so concurrent booting replicas don't race; recorded in
+`schema_migrations`). Liveness is `/healthz`; readiness (`/readyz`) probes
+Postgres and Neo4j; process counters are at `/debug/vars`.
 
 Dependencies point inward: `server → ingest → {core, filewalk, resolver}` and
 the interface implementations (`github`, `graphstore`) are injected at
