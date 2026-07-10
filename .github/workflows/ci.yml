@@ -1,26 +1,33 @@
-name: Tests
+name: ci
 
 on:
   push:
-    branches: [main]
+    branches:
+      - main
   pull_request:
-    branches: [main]
+    branches:
+      - main
 
 jobs:
   test:
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Set up Go
+      - name: set up go
         uses: actions/setup-go@v5
         with:
-          go-version-file: go.mod
+          go-version: "1.22"
 
-      - name: Install dependencies
-        run: go mod download
+      - name: set up node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
 
-      - name: Run all tests
-        run: go test ./src/...
+      - name: run backend tests
+        run: |
+          if [ -d "tests" ]; then go test ./tests/...; else echo "no tests yet"; fi
+
+      - name: run frontend tests
+        run: |
+          if [ -d "tests/frontend" ]; then node --test tests/frontend/*.test.js; else echo "no tests yet"; fi

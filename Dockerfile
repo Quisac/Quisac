@@ -13,7 +13,7 @@ COPY . .
 RUN cd html && npm install && npm run build
 
 # Build backend
-RUN CGO_ENABLED=1 go build -o out ./src/
+RUN CGO_ENABLED=1 go build -o out ./cmd/quisac
 
-EXPOSE 8080
+EXPOSE 8000
 CMD ["./out", "--serve"]
