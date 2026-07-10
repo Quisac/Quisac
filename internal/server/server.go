@@ -15,6 +15,7 @@ import (
 	"quisac/internal/config"
 	"quisac/internal/db"
 	"quisac/internal/github"
+	"quisac/internal/pagerduty"
 	"quisac/internal/session"
 )
 
@@ -75,6 +76,7 @@ func New(cfg *config.Config, log *slog.Logger, store SessionStore, queue JobQueu
 // request-id and access-log middleware.
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
+	mux.HandleFunc("/api/pagerduty/webhook", pagerduty.IncidentHandler)
 	mux.HandleFunc("/api/index", s.handleIndex)
 	mux.HandleFunc("/api/graph/", s.handleGraph)
 	mux.HandleFunc("/webhook", s.handleWebhook)
