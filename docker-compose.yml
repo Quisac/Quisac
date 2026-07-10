@@ -8,8 +8,6 @@ services:
       POSTGRES_DB: ${POSTGRES_DB:?set POSTGRES_DB in .env}
     volumes:
       - pgdata:/var/lib/postgresql/data
-      # Schema is applied by the app on boot (Store.Migrate), not here — so it
-      # also works against managed Postgres where initdb hooks never run.
     ports:
       - "5432:5432"
     healthcheck:
@@ -20,9 +18,6 @@ services:
 
   neo4j:
     image: neo4j:5
-    # NOTE: do NOT use `env_file: .env` here. Neo4j 5 treats every NEO4J_*
-    # env var as a config setting (NEO4J_URI -> setting "URI") and aborts on
-    # strict validation. Those vars are for the app; pass Neo4j only what it needs.
     environment:
       NEO4J_AUTH: ${NEO4J_USER:?set NEO4J_USER in .env}/${NEO4J_PASSWORD:?set NEO4J_PASSWORD in .env}
     volumes:
