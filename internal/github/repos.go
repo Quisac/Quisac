@@ -41,7 +41,7 @@ func (a *App) Repositories(ctx context.Context, installationID string) ([]Repo, 
 	}
 
 	opt := &github.ListOptions{PerPage: 100}
-	var repos []Repo
+	repos := make([]Repo, 0) // never nil → always encodes as [] not null
 	for {
 		result, resp, err := client.Apps.ListRepos(ctx, opt)
 		if err != nil {
