@@ -62,7 +62,7 @@ func (c Config) withDefaults() Config {
 		c.Workers = 4
 	}
 	if c.PollInterval <= 0 {
-		c.PollInterval = 2 * time.Second
+		c.PollInterval = 5 * time.Second
 	}
 	if c.JobTimeout <= 0 {
 		c.JobTimeout = 30 * time.Minute

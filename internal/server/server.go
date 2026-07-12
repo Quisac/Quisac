@@ -8,6 +8,7 @@ import (
 	"expvar"
 	"log/slog"
 	"net/http"
+	_ "net/http/pprof" // registers /debug/pprof/ handlers on DefaultServeMux
 	"strconv"
 	"strings"
 	"time"
@@ -18,6 +19,7 @@ import (
 	"quisac/internal/pagerduty"
 	"quisac/internal/session"
 )
+
 
 const (
 	oauthStateCookie = "quisac_oauth_state"
@@ -89,6 +91,10 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/healthz", s.handleHealthz)
 	mux.HandleFunc("/readyz", s.handleReadyz)
 	mux.Handle("/debug/vars", expvar.Handler())
+	// Profiling: capture 30s CPU profile with:
+	//   go tool pprof http://localhost:8000/debug/pprof/profile?seconds=30
+	// View live goroutines: curl http://localhost:8000/debug/pprof/goroutine?debug=1
+	mux.Handle("/debug/pprof/", http.DefaultServeMux)
 	mux.HandleFunc("/", s.handleStatic)
 	return s.withRequestID(s.withLogging(mux))
 }

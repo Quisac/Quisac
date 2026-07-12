@@ -15,6 +15,27 @@ const timeAgo = (ts) => {
   return `${Math.floor(s / 3600)}h ago`
 }
 
+// Module-level cache: /api/repos is fetched once per page load, not on every
+// component mount. React StrictMode unmounts and remounts components in dev,
+// which was causing a fresh GitHub API call (taking ~800ms) on every remount.
+let reposCache = null
+let reposFetchPromise = null
+
+function fetchRepos() {
+  if (reposCache !== null) return Promise.resolve(reposCache)
+  if (reposFetchPromise) return reposFetchPromise
+  reposFetchPromise = fetch('/api/repos', { credentials: 'same-origin' })
+    .then(async (res) => {
+      if (res.status === 401) return { status: 'unauth' }
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      const repos = await res.json()
+      reposCache = { status: 'ready', repos: repos ?? [] }
+      return reposCache
+    })
+    .finally(() => { reposFetchPromise = null })
+  return reposFetchPromise
+}
+
 export default function RepoExplorer() {
   const [repoState, setRepoState] = useState({ status: 'loading', repos: [], error: null })
   const [query, setQuery] = useState('')
@@ -24,15 +45,15 @@ export default function RepoExplorer() {
 
   useEffect(() => {
     let cancelled = false
-    fetch('/api/repos', { credentials: 'same-origin' })
-      .then(async (res) => {
-        if (res.status === 401) return { status: 'unauth' }
-        if (!res.ok) throw new Error(`HTTP ${res.status}`)
-        return { status: 'ready', repos: await res.json() }
-      })
+    fetchRepos()
       .then((d) => { if (!cancelled) setRepoState({ repos: [], error: null, ...d }) })
       .catch((e) => { if (!cancelled) setRepoState({ status: 'error', repos: [], error: e.message }) })
-    return () => { cancelled = true; clearInterval(pollRef.current) }
+    return () => {
+      cancelled = true
+      // Only clear the polling interval on unmount — don't cancel the repos
+      // fetch since that result is shared via the module cache.
+      clearInterval(pollRef.current)
+    }
   }, [])
 
   const filtered = useMemo(() => {

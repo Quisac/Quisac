@@ -14,8 +14,8 @@ import (
 
 var supported = map[string]bool{
 	".py": true, ".go": true,
-	".js": true, ".jsx": true,
-	".ts": true, ".tsx": true,
+	".js": true, ".jsx": false,
+	".ts": true, ".tsx": false,
 }
 
 // skipDirs are directories that hold dependencies or generated/build output —

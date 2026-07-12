@@ -1,18 +1,33 @@
 import { useEffect, useState } from 'react'
 
-// useSession asks the backend who we are. The HttpOnly session cookie is the
-// source of truth for "am I connected?"; this hook surfaces it to the SPA so
-// components don't keep their own (drift-prone) copy of auth state.
-//
-// Returns { loading, session } where session is { connected, login,
-// installationId } when connected, or null otherwise.
+// Module-level cache: /api/me is fetched exactly once per page load.
+// React StrictMode unmounts and remounts components in dev, which was
+// causing two back-to-back DB lookups per load (visible in logs as paired
+// /api/me 200s). Since the session is immutable within a page visit, a
+// single shared promise is safe.
+let sessionCache = undefined      // undefined = not yet fetched
+let sessionPromise = null
+
+function fetchSession() {
+  if (sessionCache !== undefined) return Promise.resolve(sessionCache)
+  if (sessionPromise) return sessionPromise
+  sessionPromise = fetch('/api/me', { credentials: 'same-origin' })
+    .then((res) => (res.ok ? res.json() : null))
+    .then((session) => { sessionCache = session; return session })
+    .catch(() => { sessionCache = null; return null })
+    .finally(() => { sessionPromise = null })
+  return sessionPromise
+}
+
+// Call this after logout so the next connect re-fetches.
+export function clearSessionCache() { sessionCache = undefined }
+
 export default function useSession() {
   const [state, setState] = useState({ loading: true, session: null })
 
   useEffect(() => {
     let cancelled = false
-    fetch('/api/me', { credentials: 'same-origin' })
-      .then((res) => (res.ok ? res.json() : null))
+    fetchSession()
       .then((session) => { if (!cancelled) setState({ loading: false, session }) })
       .catch(() => { if (!cancelled) setState({ loading: false, session: null }) })
     return () => { cancelled = true }

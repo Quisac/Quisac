@@ -2,9 +2,11 @@ import Sidebar from './Sidebar'
 import LogCard from './LogCard'
 import ResolutionCard from './ResolutionCard'
 import RepoExplorer from './RepoExplorer'
+import { clearSessionCache } from '../useSession'
 
 export default function Dashboard({ session, activeView, onNavigate }) {
   const disconnect = async () => {
+    clearSessionCache()
     await fetch('/api/logout', { method: 'POST', credentials: 'same-origin' })
     window.location.href = '/'
   }
