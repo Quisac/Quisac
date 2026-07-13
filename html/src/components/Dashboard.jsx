@@ -2,6 +2,7 @@ import Sidebar from './Sidebar'
 import LogCard from './LogCard'
 import ResolutionCard from './ResolutionCard'
 import RepoExplorer from './RepoExplorer'
+import IncidentsView from './IncidentsView'
 import { clearSessionCache } from '../useSession'
 
 export default function Dashboard({ session, activeView, onNavigate }) {
@@ -51,7 +52,9 @@ export default function Dashboard({ session, activeView, onNavigate }) {
 
           {activeView === 'graph' && <RepoExplorer />}
 
-          {activeView !== 'dashboard' && activeView !== 'graph' && (
+          {activeView === 'incidents' && <IncidentsView session={session} />}
+
+          {activeView !== 'dashboard' && activeView !== 'graph' && activeView !== 'incidents' && (
             <div className="coming-soon">This view is coming soon.</div>
           )}
         </main>

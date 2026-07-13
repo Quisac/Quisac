@@ -77,6 +77,12 @@ func (s *Store) Close(ctx context.Context) error {
 	return s.driver.Close(ctx)
 }
 
+// Driver returns the underlying Neo4j driver. Used by the traverse package to
+// run BFS Cypher queries that go beyond graphstore's higher-level API surface.
+func (s *Store) Driver() neo4j.DriverWithContext {
+	return s.driver
+}
+
 // Ping verifies connectivity to Neo4j. Used by the readiness probe.
 func (s *Store) Ping(ctx context.Context) error {
 	return s.driver.VerifyConnectivity(ctx)

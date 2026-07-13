@@ -16,8 +16,8 @@ import (
 	"quisac/internal/config"
 	"quisac/internal/db"
 	"quisac/internal/github"
-	"quisac/internal/pagerduty"
 	"quisac/internal/session"
+	"quisac/internal/traverse"
 )
 
 
@@ -49,28 +49,45 @@ type Waker interface {
 	Wake()
 }
 
+// IncidentStore persists PagerDuty incidents and their traversal results.
+// Satisfied by *db.Store.
+type IncidentStore interface {
+	CreateIncident(ctx context.Context, inc db.Incident) error
+	ListIncidents(ctx context.Context, installationID string) ([]db.Incident, error)
+	GetIncident(ctx context.Context, id string) (db.Incident, error)
+	MarkTraversing(ctx context.Context, id string) error
+	UpdateIncidentResult(ctx context.Context, id, repo string, entryPoint, candidates any) error
+	FailIncidentTraversal(ctx context.Context, id string) error
+	ListIndexedRepos(ctx context.Context, installationID string) ([]string, error)
+}
+
 // Server holds the dependencies shared across HTTP handlers.
 type Server struct {
-	cfg    *config.Config
-	log    *slog.Logger
-	app    *github.App
-	signer *session.Signer
-	store  SessionStore
-	queue  JobQueue
-	waker  Waker
-	checks []readinessCheck
+	cfg       *config.Config
+	log       *slog.Logger
+	app       *github.App
+	signer    *session.Signer
+	store     SessionStore
+	queue     JobQueue
+	waker     Waker
+	incidents IncidentStore
+	traverser *traverse.Traverser // nil if Neo4j is unavailable
+	checks    []readinessCheck
 }
 
 // New builds a Server from a resolved config and its dependencies.
-func New(cfg *config.Config, log *slog.Logger, store SessionStore, queue JobQueue, waker Waker, app *github.App) *Server {
+// traverser may be nil — the PagerDuty handler gracefully degrades when it is.
+func New(cfg *config.Config, log *slog.Logger, store SessionStore, queue JobQueue, incidents IncidentStore, waker Waker, app *github.App, traverser *traverse.Traverser) *Server {
 	return &Server{
-		cfg:    cfg,
-		log:    log,
-		app:    app,
-		signer: session.NewSigner(cfg.Server.SessionSecret),
-		store:  store,
-		queue:  queue,
-		waker:  waker,
+		cfg:       cfg,
+		log:       log,
+		app:       app,
+		signer:    session.NewSigner(cfg.Server.SessionSecret),
+		store:     store,
+		queue:     queue,
+		waker:     waker,
+		incidents: incidents,
+		traverser: traverser,
 	}
 }
 
@@ -78,7 +95,12 @@ func New(cfg *config.Config, log *slog.Logger, store SessionStore, queue JobQueu
 // request-id and access-log middleware.
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
-	mux.HandleFunc("/api/pagerduty/webhook", pagerduty.IncidentHandler)
+	// PagerDuty webhook — unauthenticated, stores incident
+	mux.HandleFunc("/api/pagerduty/webhook", s.handlePagerDuty)
+	// Incident list + per-incident traversal trigger — requires session
+	mux.HandleFunc("/api/incidents", s.handleIncidents)
+	mux.HandleFunc("/api/incidents/", s.handleIncidentTraverse)
+	// Existing endpoints
 	mux.HandleFunc("/api/index", s.handleIndex)
 	mux.HandleFunc("/api/graph/", s.handleGraph)
 	mux.HandleFunc("/webhook", s.handleWebhook)
@@ -91,9 +113,6 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/healthz", s.handleHealthz)
 	mux.HandleFunc("/readyz", s.handleReadyz)
 	mux.Handle("/debug/vars", expvar.Handler())
-	// Profiling: capture 30s CPU profile with:
-	//   go tool pprof http://localhost:8000/debug/pprof/profile?seconds=30
-	// View live goroutines: curl http://localhost:8000/debug/pprof/goroutine?debug=1
 	mux.Handle("/debug/pprof/", http.DefaultServeMux)
 	mux.HandleFunc("/", s.handleStatic)
 	return s.withRequestID(s.withLogging(mux))

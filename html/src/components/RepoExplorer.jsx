@@ -21,6 +21,10 @@ const timeAgo = (ts) => {
 let reposCache = null
 let reposFetchPromise = null
 
+// Persist user selection and loaded graphs across unmounts when they switch tabs
+let selectedRepoCache = null
+let byRepoCache = {}
+
 function fetchRepos() {
   if (reposCache !== null) return Promise.resolve(reposCache)
   if (reposFetchPromise) return reposFetchPromise
@@ -39,9 +43,19 @@ function fetchRepos() {
 export default function RepoExplorer() {
   const [repoState, setRepoState] = useState({ status: 'loading', repos: [], error: null })
   const [query, setQuery] = useState('')
-  const [selected, setSelected] = useState(null)   // full_name
-  const [byRepo, setByRepo] = useState({})         // full_name -> { status, graph, error, nodes, edges, at }
+  const [selected, setSelectedState] = useState(selectedRepoCache)
+  const [byRepo, setByRepoState] = useState(byRepoCache)
   const pollRef = useRef(null)
+
+  const setSelected = useCallback((val) => {
+    selectedRepoCache = val
+    setSelectedState(val)
+  }, [])
+
+  const patch = useCallback((repo, next) => {
+    byRepoCache = { ...byRepoCache, [repo]: { ...byRepoCache[repo], ...next } }
+    setByRepoState(byRepoCache)
+  }, [])
 
   useEffect(() => {
     let cancelled = false
@@ -61,9 +75,7 @@ export default function RepoExplorer() {
     return q ? repoState.repos.filter((r) => r.full_name.toLowerCase().includes(q)) : repoState.repos
   }, [repoState.repos, query])
 
-  const patch = useCallback((repo, next) => {
-    setByRepo((prev) => ({ ...prev, [repo]: { ...prev[repo], ...next } }))
-  }, [])
+
 
   const index = useCallback((repo) => {
     clearInterval(pollRef.current)

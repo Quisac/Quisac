@@ -11,3 +11,6 @@ html/node_modules
 
 # os
 .DS_Store
+
+
+*.json

@@ -19,6 +19,7 @@ import (
 	"quisac/internal/graphstore"
 	"quisac/internal/ingest"
 	"quisac/internal/server"
+	"quisac/internal/traverse"
 	"quisac/internal/worker"
 )
 
@@ -76,7 +77,8 @@ func runServer() {
 	}
 
 	pool := worker.New(store, ingest.New(app, graphStore, log), log, worker.Config{})
-	srv := server.New(cfg, log, store, store, pool, app)
+	traverser := traverse.New(graphStore.Driver())
+	srv := server.New(cfg, log, store, store, store, pool, app, traverser)
 	srv.AddReadinessCheck("postgres", store.Ping)
 	srv.AddReadinessCheck("neo4j", graphStore.Ping)
 

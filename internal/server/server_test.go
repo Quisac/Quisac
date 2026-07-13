@@ -66,7 +66,7 @@ func newTestServer(store SessionStore, queue JobQueue, waker Waker) *Server {
 	cfg := &config.Config{}
 	cfg.Server.SessionSecret = "test-secret"
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-	return New(cfg, log, store, queue, waker, nil)
+	return New(cfg, log, store, queue, nil, waker, nil, nil)
 }
 
 func authedStore(userID int64) *fakeStore {
