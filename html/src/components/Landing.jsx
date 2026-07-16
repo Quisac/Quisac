@@ -25,7 +25,7 @@ export default function Landing({ onConnect }) {
 
       {/* HERO */}
       <div className="hero">
-        <div className="hero-eyebrow">YC S2026</div>
+        <div className="hero-eyebrow"></div>
         <h1 className="hero-title">
           Incidents fix themselves.<br />Your team just merges.
         </h1>
@@ -147,6 +147,7 @@ export default function Landing({ onConnect }) {
       {/* FOOTER */}
       <footer className="l-footer">
         <span className="footer-logo">Quisac</span>
+        <a href="mailto:hello@quisac.com" className="nav-link">sentinel.team.co@gmail.com</a>
       </footer>
     </div>
   )
