@@ -58,3 +58,33 @@ def helper():
 		t.Errorf("Expected an Imports edge from main.py to utils.py, but it was not found")
 	}
 }
+
+// ReadRepo parses across a worker pool, so the same tree must still produce the
+// same graph — same nodes, same edges, in the same order.
+func TestReadRepoIsDeterministic(t *testing.T) {
+	dir := t.TempDir()
+	for _, f := range []struct{ name, body string }{
+		{"a.py", "from b import helper\n\ndef run():\n    helper()\n"},
+		{"b.py", "import os\n\ndef helper():\n    return os.getenv('X')\n"},
+		{"c.py", "from a import run\n\nclass Job:\n    def go(self):\n        run()\n"},
+		{"d.py", "def unused():\n    pass\n"},
+	} {
+		if err := os.WriteFile(filepath.Join(dir, f.name), []byte(f.body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	first := filewalk.ReadRepo(dir)
+	for i := range 5 {
+		g := filewalk.ReadRepo(dir)
+		if len(g.Nodes) != len(first.Nodes) || len(g.Edges) != len(first.Edges) {
+			t.Fatalf("run %d: %d/%d nodes/edges, want %d/%d",
+				i, len(g.Nodes), len(g.Edges), len(first.Nodes), len(first.Edges))
+		}
+		for j, e := range g.Edges {
+			if e != first.Edges[j] {
+				t.Fatalf("run %d: edge %d = %+v, want %+v", i, j, e, first.Edges[j])
+			}
+		}
+	}
+}

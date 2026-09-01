@@ -22,27 +22,56 @@ func getLanguage(ext string) (*tree_sitter.Language, error) {
 	}
 }
 
-// ParseCode parses a file and returns the extracted symbols.
-// filePath is used as the node ID in the graph.
-func ParseCode(code []byte, ext string, filePath string) (*astparsers.Extracted, error) {
-	parser := tree_sitter.NewParser()
-	defer parser.Close()
+// Session holds one tree-sitter parser per language, reused across files, since
+// loading a grammar per file is pure overhead over thousands of them. A parser
+// carries the last parse's state, so a Session is not safe for concurrent use.
+type Session struct {
+	parsers map[string]*tree_sitter.Parser
+}
 
-	lang, err := getLanguage(ext)
-	if err != nil {
-		return nil, err
+func NewSession() *Session {
+	return &Session{parsers: map[string]*tree_sitter.Parser{}}
+}
+
+// Close releases every parser the session built.
+func (s *Session) Close() {
+	for _, p := range s.parsers {
+		p.Close()
 	}
-	parser.SetLanguage(lang)
+	clear(s.parsers)
+}
 
-	tree := parser.Parse(code, nil)
-	defer tree.Close()
-
+// Parse extracts a file's symbols. filePath is used as the node ID in the graph.
+func (s *Session) Parse(code []byte, ext string, filePath string) (*astparsers.Extracted, error) {
 	astParser := astparsers.Get(ext)
 	if astParser == nil {
 		return nil, errors.New("no AST parser for extension: " + ext)
 	}
 
-	// Pass filePath so extracted result knows which file it came from
-	extracted := astParser.Parse(tree.RootNode(), code, filePath)
-	return extracted, nil
+	parser, ok := s.parsers[ext]
+	if !ok {
+		lang, err := getLanguage(ext)
+		if err != nil {
+			return nil, err
+		}
+		parser = tree_sitter.NewParser()
+		if err := parser.SetLanguage(lang); err != nil {
+			parser.Close()
+			return nil, err
+		}
+		s.parsers[ext] = parser
+	}
+
+	tree := parser.Parse(code, nil)
+	defer tree.Close()
+
+	return astParser.Parse(tree.RootNode(), code, filePath), nil
+}
+
+// ParseCode parses a single file with a throwaway session. Callers parsing many
+// files should build a Session and reuse it.
+func ParseCode(code []byte, ext string, filePath string) (*astparsers.Extracted, error) {
+	s := NewSession()
+	defer s.Close()
+	return s.Parse(code, ext, filePath)
 }

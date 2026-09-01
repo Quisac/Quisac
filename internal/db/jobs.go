@@ -10,13 +10,20 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
-// JobKind distinguishes the two kinds of async work on the queue.
+// JobKind distinguishes the kinds of async work on the queue.
 type JobKind string
 
 const (
 	JobFullIndex JobKind = "full_index" // user-initiated; result stored in graph
 	JobPush      JobKind = "push"       // webhook-driven incremental update
+	JobResolve   JobKind = "resolve"    // alert-driven incident resolution
 )
+
+// ResolveRepoKey is the synthetic repo key a resolve job is filed under. The
+// queue runs one job per repo, which is right for indexing but would make an
+// alert queue behind a full index of the repo it is about to traverse. A
+// per-incident key serialises retries of itself and leaves the index lane free.
+func ResolveRepoKey(incidentID string) string { return "incident:" + incidentID }
 
 // JobStatus is a job's lifecycle state.
 type JobStatus string
@@ -47,8 +54,8 @@ type IndexJobResult struct {
 	Error  string // populated when Status == StatusFailed
 }
 
-// EnqueueJob inserts a new pending job. The caller supplies the id so it can be
-// returned to the client (for full-index polling) before the worker runs.
+// EnqueueJob inserts a pending job. The caller supplies the id so it can be
+// returned to the client for polling before the worker runs.
 func (s *Store) EnqueueJob(ctx context.Context, j Job) error {
 	var userID *int64
 	if j.UserID != 0 {
@@ -69,14 +76,11 @@ func (s *Store) EnqueueJob(ctx context.Context, j Job) error {
 	return nil
 }
 
-// ClaimJob atomically claims the oldest pending job whose repo has no running
-// job, marking it running and incrementing its attempt count. It returns
-// ok=false when nothing is eligible.
+// ClaimJob atomically claims the oldest pending job whose repo has none running,
+// returning ok=false when nothing is eligible.
 //
-// The per-repo serialisation is guaranteed by the jobs_one_running_per_repo
-// partial unique index: if two workers race to run the same repo, one wins and
-// the other's UPDATE hits a unique violation, which we treat as "not claimed"
-// and retry a few times before giving up for this tick.
+// Serialisation comes from the jobs_one_running_per_repo partial unique index:
+// the loser of a race hits a unique violation, which counts as "not claimed".
 func (s *Store) ClaimJob(ctx context.Context) (Job, bool, error) {
 	const claim = `
 		UPDATE jobs SET status = 'running', started_at = now(), attempts = attempts + 1
@@ -131,9 +135,8 @@ func (s *Store) CompleteJob(ctx context.Context, id string, graph []byte) error 
 	return nil
 }
 
-// FailJob records a processing error. If the job still has attempts left it goes
-// back to pending for retry; otherwise it is marked failed. Returning to pending
-// also releases the per-repo running slot.
+// FailJob returns a job to pending while it has attempts left, otherwise marks
+// it failed. Returning to pending also releases the per-repo running slot.
 func (s *Store) FailJob(ctx context.Context, id, errMsg string) error {
 	_, err := s.pool.Exec(ctx, `
 		UPDATE jobs
@@ -149,8 +152,7 @@ func (s *Store) FailJob(ctx context.Context, id, errMsg string) error {
 	return nil
 }
 
-// GetIndexJob returns a full-index job's pollable state, scoped to its owner so
-// one user cannot read another's job.
+// GetIndexJob returns a job's pollable state, scoped to its owner.
 func (s *Store) GetIndexJob(ctx context.Context, id string, userID int64) (IndexJobResult, error) {
 	var (
 		res   IndexJobResult
@@ -176,8 +178,7 @@ func (s *Store) GetIndexJob(ctx context.Context, id string, userID int64) (Index
 	return res, nil
 }
 
-// CountActiveIndexJobs counts a user's full-index jobs that are still pending or
-// running — the input to per-user rate limiting.
+// CountActiveIndexJobs counts a user's pending or running full-index jobs.
 func (s *Store) CountActiveIndexJobs(ctx context.Context, userID int64) (int, error) {
 	var n int
 	err := s.pool.QueryRow(ctx, `
@@ -191,10 +192,9 @@ func (s *Store) CountActiveIndexJobs(ctx context.Context, userID int64) (int, er
 	return n, nil
 }
 
-// ReapStuckJobs recovers jobs whose worker died mid-run: any job running longer
-// than olderThan is returned to pending (or failed if out of attempts). The
-// threshold must exceed the longest legitimate job so live work is never reaped.
-// It returns the number of jobs recovered.
+// ReapStuckJobs recovers jobs whose worker died mid-run, returning any running
+// longer than olderThan to pending. olderThan must exceed the longest legitimate
+// job so live work is never reaped.
 func (s *Store) ReapStuckJobs(ctx context.Context, olderThan time.Duration) (int64, error) {
 	tag, err := s.pool.Exec(ctx, `
 		UPDATE jobs
@@ -210,8 +210,8 @@ func (s *Store) ReapStuckJobs(ctx context.Context, olderThan time.Duration) (int
 	return tag.RowsAffected(), nil
 }
 
-// DeleteFinishedJobs evicts terminal (done/failed) jobs older than olderThan,
-// bounding table and result-graph storage. It returns the number deleted.
+// DeleteFinishedJobs evicts terminal jobs older than olderThan, bounding table
+// and result-graph storage.
 func (s *Store) DeleteFinishedJobs(ctx context.Context, olderThan time.Duration) (int64, error) {
 	tag, err := s.pool.Exec(ctx, `
 		DELETE FROM jobs

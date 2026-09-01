@@ -18,6 +18,8 @@ import (
 	"quisac/internal/github"
 	"quisac/internal/graphstore"
 	"quisac/internal/ingest"
+	"quisac/internal/llm"
+	"quisac/internal/resolve"
 	"quisac/internal/server"
 	"quisac/internal/traverse"
 	"quisac/internal/worker"
@@ -76,9 +78,41 @@ func runServer() {
 		exit("github", err)
 	}
 
-	pool := worker.New(store, ingest.New(app, graphStore, log), log, worker.Config{})
-	traverser := traverse.New(graphStore.Driver())
-	srv := server.New(cfg, log, store, store, store, pool, app, traverser)
+	// The model that proposes fixes is optional. Without an API key the pipeline
+	// still ingests alerts, walks the graph, and replays known fixes; novel
+	// incidents stop at a ranked root-cause analysis instead of a pull request.
+	fixer, err := llm.New(llm.Config{
+		Provider: cfg.LLM.Provider,
+		APIKey:   cfg.LLM.APIKey,
+		Model:    cfg.LLM.Model,
+		Effort:   cfg.LLM.Effort,
+	})
+	if err != nil {
+		exit("llm", err)
+	}
+	if fixer == nil {
+		log.Warn("no ANTHROPIC_API_KEY or GEMINI_API_KEY set — incidents will be analysed but not fixed")
+	} else {
+		log.Info("fix engine ready", "provider", cfg.LLM.Provider, "model", fixer.Model(),
+			"auto_pr", cfg.Resolution.AutoPR, "draft_pr", cfg.Resolution.DraftPR)
+	}
+
+	indexer := ingest.New(app, graphStore, log).WithHistory(app, store)
+	traverser := traverse.New(graphStore.Driver()).WithStats(store)
+
+	resolver := resolve.New(store, traverser, app, fixer, log, resolve.Config{
+		MaxDepth:      int(cfg.Resolution.MaxDepth),
+		MaxFixFiles:   int(cfg.Resolution.MaxFixFiles),
+		MinConfidence: cfg.Resolution.MinConfidence,
+		BranchPrefix:  cfg.Resolution.BranchPrefix,
+		AutoPR:        cfg.Resolution.AutoPR,
+		DraftPR:       cfg.Resolution.DraftPR,
+	})
+
+	pool := worker.New(store, indexer, log, worker.Config{}).WithResolver(resolver)
+	srv := server.New(cfg, log, store, store, store, pool, app).
+		WithFaultGraph(traverser).
+		WithPatterns(store)
 	srv.AddReadinessCheck("postgres", store.Ping)
 	srv.AddReadinessCheck("neo4j", graphStore.Ping)
 

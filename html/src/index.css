@@ -660,8 +660,7 @@ body {
 .connect-back:hover { color: var(--text); }
 
 /* ── REPO EXPLORER ── */
-/* One surface: a repository rail on the left, a graph canvas on the right, and
-   exactly one indexing action. */
+/* A repository rail on the left, a graph canvas on the right. */
 .explorer {
   display: grid;
   grid-template-columns: 272px 1fr;
@@ -846,6 +845,128 @@ body {
   .gc-legend { max-width: none; }
 }
 
+/* ── PATTERNS + PULL REQUESTS ── */
+/* Both reuse the incident card's shell; only per-view specifics live here. */
+
+.pattern-card,
+.pr-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 1.1rem 1.25rem;
+  transition: box-shadow 0.15s;
+}
+.pattern-card:hover,
+.pr-card:hover { box-shadow: 0 2px 12px rgba(0,0,0,0.06); }
+/* A replayed pattern is the proven one, in the pipeline's zero-token green. */
+.pattern-card.proven { border-color: #c8e6d0; }
+
+.pattern-head,
+.pr-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.75rem;
+  margin-bottom: 0.6rem;
+}
+.pattern-title-row,
+.pr-title-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 1rem;
+  flex: 1;
+  min-width: 0;
+}
+.pattern-title,
+.pr-title {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--text);
+  line-height: 1.4;
+}
+.pattern-time {
+  font-size: 11.5px;
+  color: var(--muted);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.pattern-meta,
+.pr-meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 1rem;
+  margin-bottom: 0.75rem;
+  font-size: 12px;
+  color: var(--sub);
+}
+.pattern-seen { color: var(--muted); }
+.pattern-saved { color: var(--green); font-weight: 500; }
+
+.pattern-summary {
+  margin: 0 0 0.75rem;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--sub);
+}
+
+.pattern-files {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin-bottom: 0.75rem;
+}
+.pattern-files code {
+  font-family: ui-monospace, monospace;
+  font-size: 11.5px;
+  color: var(--sub);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.15rem 0.45rem;
+}
+
+.pattern-sig { margin-top: 0.75rem; }
+.pattern-sig pre {
+  margin: 0.3rem 0 0.75rem;
+  padding: 0.6rem 0.75rem;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-family: ui-monospace, monospace;
+  font-size: 11.5px;
+  line-height: 1.6;
+  color: var(--text);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.pattern-fp {
+  font-family: ui-monospace, monospace;
+  font-size: 11px;
+  color: var(--muted);
+  word-break: break-all;
+}
+
+.pr-num {
+  font-family: ui-monospace, monospace;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--blue);
+  text-decoration: none;
+  flex-shrink: 0;
+}
+.pr-num:hover { text-decoration: underline; }
+.pr-branch {
+  font-family: ui-monospace, monospace;
+  font-size: 11.5px;
+  color: var(--sub);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.15rem 0.45rem;
+}
+
 .coming-soon {
   padding: 3rem 2rem;
   color: var(--muted);
@@ -999,6 +1120,28 @@ body {
 }
 .expand-btn:hover { border-color: var(--blue); }
 
+/* The button stays quiet until armed, then turns red: the second click deletes. */
+.resolve-btn {
+  font: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--green);
+  background: var(--green-lt);
+  border: 1px solid transparent;
+  padding: 8px 18px;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+.resolve-btn:hover:not(:disabled) { border-color: var(--green); }
+.resolve-btn.confirm {
+  color: #fff;
+  background: var(--red);
+  border-color: var(--red);
+}
+.resolve-btn.confirm:hover:not(:disabled) { background: #b3261e; }
+.resolve-btn:disabled { opacity: 0.6; cursor: default; }
+
 .inc-error { font-size: 12px; color: var(--red); }
 
 /* Traversal result */
@@ -1114,3 +1257,208 @@ body {
 .inc-loading { padding: 3rem; text-align: center; color: var(--muted); font-size: 14px; }
 .inc-error-banner { padding: 1rem; background: #fce8e6; color: var(--red); border-radius: 8px; font-size: 13px; }
 .inc-empty { font-size: 13px; color: var(--muted); padding: 1rem 0; }
+
+/* ── RESOLUTION PIPELINE ─────────────────────────────────────────────────── */
+
+.badge-blue { background: var(--blue-lt); color: var(--blue); }
+
+/* Amber is working, green is ready for you, red needs a human. */
+.res-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 9px;
+  border-radius: 11px;
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+}
+.res-pending  { background: var(--bg);       color: var(--muted); border: 1px solid var(--border); }
+.res-working  { background: var(--amber-lt); color: var(--amber); }
+.res-resolved { background: var(--green-lt); color: var(--green); }
+.res-nofix    { background: var(--blue-lt);  color: var(--blue);  }
+.res-failed   { background: #fce8e6;         color: var(--red);   }
+
+.res-spinner {
+  width: 9px;
+  height: 9px;
+  border: 1.5px solid currentColor;
+  border-top-color: transparent;
+  border-radius: 50%;
+  animation: res-spin 0.7s linear infinite;
+}
+@keyframes res-spin { to { transform: rotate(360deg); } }
+
+.inc-elapsed { color: var(--muted); font-size: 11.5px; }
+
+/* An incident row's payload: what broke, what changed, where the PR is. */
+.res-panel {
+  margin: 0.9rem 0 0.25rem;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--border2);
+  border-radius: 8px;
+  background: var(--surface);
+  padding: 0.9rem 1rem;
+}
+.res-panel.ok { border-left-color: var(--green); background: #fbfefc; }
+
+.res-panel-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 0.75rem;
+}
+.res-panel-title { font-size: 13px; font-weight: 500; color: var(--text); }
+.res-method {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 10px;
+  background: var(--bg);
+  color: var(--sub);
+  border: 1px solid var(--border);
+  cursor: help;
+}
+.res-tokens {
+  margin-left: auto;
+  font-size: 11px;
+  font-family: ui-monospace, monospace;
+  color: var(--muted);
+}
+.res-tokens.zero { color: var(--green); font-weight: 500; }
+
+.res-block { margin-bottom: 0.8rem; }
+.res-block:last-child { margin-bottom: 0; }
+.res-block-label {
+  font-size: 10.5px;
+  font-weight: 500;
+  color: var(--muted);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  margin-bottom: 5px;
+}
+.res-root-cause,
+.res-summary,
+.res-reason {
+  font-size: 13px;
+  line-height: 1.65;
+  color: var(--text);
+}
+.res-reason { color: var(--sub); }
+
+.res-file {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 5px 0;
+  border-bottom: 1px solid var(--border);
+  font-size: 12.5px;
+}
+.res-file:last-child { border-bottom: none; }
+.res-file code { font-family: ui-monospace, monospace; font-size: 12px; color: var(--text); }
+.res-diff { display: flex; gap: 6px; font-family: ui-monospace, monospace; font-size: 11.5px; }
+
+.res-pr {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 0.9rem;
+  padding: 9px 12px;
+  border: 1px solid var(--border2);
+  border-radius: 7px;
+  background: var(--bg);
+  text-decoration: none;
+  transition: border-color 0.15s;
+}
+.res-pr:hover { border-color: var(--blue); }
+.res-pr-num { font-family: ui-monospace, monospace; font-size: 12px; font-weight: 500; color: var(--blue); }
+.res-pr-branch { font-family: ui-monospace, monospace; font-size: 11.5px; color: var(--sub); }
+.res-pr-open { margin-left: auto; font-size: 12px; font-weight: 500; color: var(--blue); }
+
+.res-confidence { margin-top: 0.6rem; font-size: 11.5px; color: var(--muted); }
+.res-empty { font-size: 13px; color: var(--sub); line-height: 1.7; }
+
+/* The bar reads at a glance; the number stays for precise comparison. */
+.score-cell { display: flex; align-items: center; gap: 7px; white-space: nowrap; }
+.score-bar {
+  display: inline-block;
+  width: 44px;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--border);
+  overflow: hidden;
+}
+.score-bar i { display: block; height: 100%; background: var(--blue); }
+.reason-cell { color: var(--sub); font-size: 11.5px; line-height: 1.55; max-width: 300px; }
+
+/* PagerDuty setup banner */
+.integration-banner {
+  background: var(--surface);
+  padding: 1rem 1.25rem;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  margin-bottom: 1.5rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+.integration-banner h4 { margin: 0 0 0.4rem; font-size: 14px; font-weight: 500; }
+.integration-banner p { margin: 0; font-size: 13px; color: var(--sub); line-height: 1.6; }
+.webhook-url {
+  display: inline-block;
+  margin-top: 0.6rem;
+  padding: 4px 8px;
+  background: var(--bg);
+  border-radius: 4px;
+  font-family: ui-monospace, monospace;
+  font-size: 12px;
+  color: var(--blue);
+  word-break: break-all;
+}
+.integration-banner .connect-btn { white-space: nowrap; }
+
+/* ── Fault subgraph ─────────────────────────────────────────────────────── */
+
+/* GraphCanvas fills its parent absolutely, so the stage has to own the height. */
+.fault-graph {
+  position: relative;
+  height: 380px;
+  margin: 0 0 8px;
+  border: 1px solid rgba(148,163,184,0.16);
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+.fg-meta {
+  display: flex; align-items: center; gap: 8px;
+  margin-bottom: 18px;
+  font-size: 11.5px; color: #6b7789;
+}
+.fg-truncated {
+  padding: 1px 7px;
+  border: 1px solid rgba(232,163,61,0.35);
+  border-radius: 999px;
+  color: #e8a33d;
+  font-size: 10.5px; letter-spacing: 0.03em; text-transform: uppercase;
+}
+
+.fg-state {
+  margin: 0 0 18px;
+  font-size: 13px; color: var(--muted);
+}
+.fg-error { color: #f2545b; }
+
+.gc-tip-rank {
+  font-size: 11px; color: #e8a33d; font-weight: 500;
+}
+
+@media (max-width: 720px) {
+  .fault-graph { height: 260px; }
+}
+
+.gc-tip-ext {
+  margin-top: 3px;
+  font-size: 10.5px; line-height: 1.45; color: #7e8a9c;
+  font-family: ui-monospace, monospace;
+  word-break: break-word;
+}

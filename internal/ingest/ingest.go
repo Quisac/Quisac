@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"path/filepath"
+	"time"
 
 	"quisac/internal/core"
 	"quisac/internal/filewalk"
@@ -34,13 +35,30 @@ type GraphStore interface {
 	SetHead(ctx context.Context, repo, headSHA string) error
 }
 
-// Indexer builds full indexes and applies incremental updates. Per-repo
-// serialization is enforced upstream by the durable job queue (at most one
-// running job per repo), so ProcessPush can assume it has no concurrent writer.
+// ChurnSource reads a repository's recent commit activity. Satisfied by
+// *github.App. Optional — see WithHistory.
+type ChurnSource interface {
+	RecentFileChurn(ctx context.Context, installationID, repo string, maxCommits int) ([]core.FileChurn, error)
+}
+
+// StatsRecorder persists per-file change history. Satisfied by *db.Store.
+// Optional — see WithHistory.
+type StatsRecorder interface {
+	RecordFileChanges(ctx context.Context, repo string, paths []string, at time.Time) error
+	SeedFileChurn(ctx context.Context, repo string, churn []core.FileChurn) error
+}
+
+// Indexer builds full indexes and applies incremental updates. The job queue
+// runs at most one job per repo, so ProcessPush has no concurrent writer.
 type Indexer struct {
 	src   RepoSource
 	store GraphStore
 	log   *slog.Logger
+
+	// Optional: without them the graph is still complete, and only the
+	// history-based half of root-cause ranking goes quiet.
+	churn ChurnSource
+	stats StatsRecorder
 }
 
 func New(src RepoSource, store GraphStore, log *slog.Logger) *Indexer {
@@ -49,6 +67,18 @@ func New(src RepoSource, store GraphStore, log *slog.Logger) *Indexer {
 	}
 	return &Indexer{src: src, store: store, log: log}
 }
+
+// WithHistory enables change-history tracking: a churn seed read from commit
+// history at full-index time, then per-push updates thereafter.
+func (ix *Indexer) WithHistory(churn ChurnSource, stats StatsRecorder) *Indexer {
+	ix.churn = churn
+	ix.stats = stats
+	return ix
+}
+
+// churnSeedCommits costs one API call each, so it stops well below the point
+// where older history would still move a recency score.
+const churnSeedCommits = 100
 
 // FullIndex downloads repo, builds its graph, and persists it under headSHA
 // (looked up from GitHub when empty). It returns the built graph.
@@ -74,7 +104,28 @@ func (ix *Indexer) FullIndex(ctx context.Context, installationID, repo, headSHA 
 	}
 	ix.log.Info("full index", "repo", repo, "head", shortSHA(headSHA),
 		"nodes", len(g.Nodes), "edges", len(g.Edges))
+
+	ix.seedHistory(ctx, installationID, repo)
 	return g, nil
+}
+
+// seedHistory primes change history from recent commits, so a fresh index can
+// rank on recency and churn without waiting weeks for pushes to accumulate. It
+// is best-effort and never fails the index.
+func (ix *Indexer) seedHistory(ctx context.Context, installationID, repo string) {
+	if ix.churn == nil || ix.stats == nil {
+		return
+	}
+	churn, err := ix.churn.RecentFileChurn(ctx, installationID, repo, churnSeedCommits)
+	if err != nil {
+		ix.log.Warn("churn seed failed", "repo", repo, "err", err)
+		return
+	}
+	if err := ix.stats.SeedFileChurn(ctx, repo, churn); err != nil {
+		ix.log.Warn("churn seed store failed", "repo", repo, "err", err)
+		return
+	}
+	ix.log.Info("change history seeded", "repo", repo, "files", len(churn))
 }
 
 // ProcessPush brings repo's graph up to date for a push. When the stored head
@@ -154,6 +205,14 @@ func (ix *Indexer) ProcessPush(ctx context.Context, installationID, repo, before
 	if err := ix.store.SetHead(ctx, repo, after); err != nil {
 		return err
 	}
+
+	// Where the recency and churn signals accrue between full indexes.
+	if ix.stats != nil {
+		if err := ix.stats.RecordFileChanges(ctx, repo, paths, time.Now()); err != nil {
+			ix.log.Warn("record file changes", "repo", repo, "err", err)
+		}
+	}
+
 	ix.log.Info("push → incremental", "repo", repo, "before", shortSHA(before),
 		"after", shortSHA(after), "changed", len(paths), "structural", structural)
 	return nil

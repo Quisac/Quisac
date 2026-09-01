@@ -3,9 +3,43 @@ import LogCard from './LogCard'
 import ResolutionCard from './ResolutionCard'
 import RepoExplorer from './RepoExplorer'
 import IncidentsView from './IncidentsView'
+import PatternsView from './PatternsView'
+import PullRequestsView from './PullRequestsView'
 import { clearSessionCache } from '../useSession'
+import useIncidents, { summarise } from '../useIncidents'
+
+// The heading for each view the sidebar routes to.
+const TITLES = {
+  dashboard: 'Dashboard',
+  graph:     'Code graph',
+  incidents: 'Incidents',
+  prs:       'Pull requests',
+  patterns:  'Patterns',
+}
+
+// Badges renders the live pipeline counters, hiding any that are zero.
+function Badges({ stats }) {
+  return (
+    <>
+      {stats.resolving > 0 && (
+        <span className="badge badge-amber">{stats.resolving} resolving</span>
+      )}
+      {stats.resolvedToday > 0 && (
+        <span className="badge badge-green">{stats.resolvedToday} resolved today</span>
+      )}
+      {stats.patternHits > 0 && (
+        <span className="badge badge-blue" title="Resolved from the pattern cache — zero model tokens">
+          {stats.patternHits} from cache
+        </span>
+      )}
+    </>
+  )
+}
 
 export default function Dashboard({ session, activeView, onNavigate }) {
+  const { incidents } = useIncidents()
+  const stats = summarise(incidents)
+
   const disconnect = async () => {
     clearSessionCache()
     await fetch('/api/logout', { method: 'POST', credentials: 'same-origin' })
@@ -21,8 +55,7 @@ export default function Dashboard({ session, activeView, onNavigate }) {
           </span>
         </div>
         <div className="dash-topbar-right">
-          <span className="badge badge-amber">1 resolving</span>
-          <span className="badge badge-green">12 resolved today</span>
+          <Badges stats={stats} />
           <span className="dash-account">
             Connected as <strong>{session.login || 'GitHub'}</strong>
           </span>
@@ -35,10 +68,9 @@ export default function Dashboard({ session, activeView, onNavigate }) {
 
         <main className="main">
           <div className="main-header">
-            <h1 className="main-title">Dashboard</h1>
+            <h1 className="main-title">{TITLES[activeView] ?? 'Dashboard'}</h1>
             <div className="main-badges">
-              <span className="badge badge-amber">1 resolving</span>
-              <span className="badge badge-green">12 resolved today</span>
+              <Badges stats={stats} />
             </div>
           </div>
 
@@ -54,9 +86,9 @@ export default function Dashboard({ session, activeView, onNavigate }) {
 
           {activeView === 'incidents' && <IncidentsView session={session} />}
 
-          {activeView !== 'dashboard' && activeView !== 'graph' && activeView !== 'incidents' && (
-            <div className="coming-soon">This view is coming soon.</div>
-          )}
+          {activeView === 'prs' && <PullRequestsView />}
+
+          {activeView === 'patterns' && <PatternsView />}
         </main>
       </div>
     </div>

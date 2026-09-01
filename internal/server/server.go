@@ -20,14 +20,12 @@ import (
 	"quisac/internal/traverse"
 )
 
-
 const (
 	oauthStateCookie = "quisac_oauth_state"
 	sessionCookie    = "quisac_session"
 )
 
-// SessionStore persists users and their sessions. It is satisfied by *db.Store
-// and injected into the server, so handlers can be exercised against a fake.
+// SessionStore persists users and their sessions. Satisfied by *db.Store.
 type SessionStore interface {
 	UpsertUser(ctx context.Context, id int64, login string) error
 	CreateSession(ctx context.Context, s db.Session) error
@@ -49,16 +47,26 @@ type Waker interface {
 	Wake()
 }
 
-// IncidentStore persists PagerDuty incidents and their traversal results.
-// Satisfied by *db.Store.
+// IncidentStore persists PagerDuty incidents and their resolutions. Satisfied by
+// *db.Store. The fix pipeline runs in a worker, so its writes are not here.
 type IncidentStore interface {
 	CreateIncident(ctx context.Context, inc db.Incident) error
 	ListIncidents(ctx context.Context, installationID string) ([]db.Incident, error)
 	GetIncident(ctx context.Context, id string) (db.Incident, error)
-	MarkTraversing(ctx context.Context, id string) error
-	UpdateIncidentResult(ctx context.Context, id, repo string, entryPoint, candidates any) error
-	FailIncidentTraversal(ctx context.Context, id string) error
-	ListIndexedRepos(ctx context.Context, installationID string) ([]string, error)
+	DeleteIncident(ctx context.Context, id, installationID string) error
+}
+
+// PatternStore reads the learned-fix cache. Satisfied by *db.Store; patterns are
+// written by the resolver in a worker, so no write methods belong here.
+type PatternStore interface {
+	ListPatterns(ctx context.Context, installationID string, limit int) ([]db.Pattern, error)
+}
+
+// FaultGrapher returns the subgraph connecting an incident's ranked candidates
+// back to its entry point. Satisfied by *traverse.Traverser, and optional: a
+// deployment without it serves the candidate list but cannot draw the paths.
+type FaultGrapher interface {
+	FaultGraph(ctx context.Context, q traverse.FaultQuery) (*traverse.FaultGraph, error)
 }
 
 // Server holds the dependencies shared across HTTP handlers.
@@ -71,13 +79,13 @@ type Server struct {
 	queue     JobQueue
 	waker     Waker
 	incidents IncidentStore
-	traverser *traverse.Traverser // nil if Neo4j is unavailable
+	patterns  PatternStore
+	faults    FaultGrapher
 	checks    []readinessCheck
 }
 
 // New builds a Server from a resolved config and its dependencies.
-// traverser may be nil — the PagerDuty handler gracefully degrades when it is.
-func New(cfg *config.Config, log *slog.Logger, store SessionStore, queue JobQueue, incidents IncidentStore, waker Waker, app *github.App, traverser *traverse.Traverser) *Server {
+func New(cfg *config.Config, log *slog.Logger, store SessionStore, queue JobQueue, incidents IncidentStore, waker Waker, app *github.App) *Server {
 	return &Server{
 		cfg:       cfg,
 		log:       log,
@@ -87,20 +95,33 @@ func New(cfg *config.Config, log *slog.Logger, store SessionStore, queue JobQueu
 		queue:     queue,
 		waker:     waker,
 		incidents: incidents,
-		traverser: traverser,
 	}
+}
+
+// WithFaultGraph attaches the reader behind GET /api/incidents/{id}/graph.
+// Without it, that endpoint reports the subgraph as unavailable.
+func (s *Server) WithFaultGraph(f FaultGrapher) *Server {
+	s.faults = f
+	return s
+}
+
+// WithPatterns attaches the learned-fix cache behind GET /api/patterns. Without
+// it that endpoint reports the store as unavailable; the resolver holds its own
+// handle, so nothing else is affected.
+func (s *Server) WithPatterns(p PatternStore) *Server {
+	s.patterns = p
+	return s
 }
 
 // Handler returns the router with all routes registered, wrapped in the
 // request-id and access-log middleware.
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
-	// PagerDuty webhook — unauthenticated, stores incident
+	// Signature-authenticated rather than session-authenticated.
 	mux.HandleFunc("/api/pagerduty/webhook", s.handlePagerDuty)
-	// Incident list + per-incident traversal trigger — requires session
 	mux.HandleFunc("/api/incidents", s.handleIncidents)
-	mux.HandleFunc("/api/incidents/", s.handleIncidentTraverse)
-	// Existing endpoints
+	mux.HandleFunc("/api/incidents/", s.handleIncidentRoute)
+	mux.HandleFunc("/api/patterns", s.handlePatterns)
 	mux.HandleFunc("/api/index", s.handleIndex)
 	mux.HandleFunc("/api/graph/", s.handleGraph)
 	mux.HandleFunc("/webhook", s.handleWebhook)
@@ -279,9 +300,8 @@ type sessionData struct {
 // sessionTTL is how long a persisted session stays valid.
 const sessionTTL = 7 * 24 * time.Hour
 
-// startSession upserts the user, persists a new session, and sets the cookie to
-// the opaque session token. The token is high-entropy, so the DB lookup is the
-// only check needed — no signing.
+// startSession upserts the user, persists a session, and sets the cookie. The
+// token is high-entropy, so the lookup is the only check needed — no signing.
 func (s *Server) startSession(ctx context.Context, w http.ResponseWriter, r *http.Request, userID int64, login, installationID string) error {
 	if err := s.store.UpsertUser(ctx, userID, login); err != nil {
 		return err
@@ -334,10 +354,8 @@ func (s *Server) handleStatic(w http.ResponseWriter, r *http.Request) {
 	http.FileServer(http.Dir("html/dist")).ServeHTTP(w, r)
 }
 
-// secureCookies reports whether cookies should carry the Secure flag.
-// It reads the X-Forwarded-Proto header set by reverse proxies (Railway, ngrok,
-// nginx, etc.) when they terminate TLS and forward as plain HTTP. This is the
-// standard way to detect HTTPS behind a proxy without hardcoding env vars.
+// secureCookies reads X-Forwarded-Proto, which a TLS-terminating proxy sets when
+// it forwards as plain HTTP.
 func (s *Server) secureCookies(r *http.Request) bool {
 	return r.Header.Get("X-Forwarded-Proto") == "https"
 }

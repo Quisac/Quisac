@@ -1,8 +1,7 @@
-// Package worker drains the durable job queue: it claims jobs, runs them through
-// the indexer, and records the outcome. Multiple workers run concurrently and,
-// together with the per-repo serialisation enforced by the queue, give at-most-
-// once-per-repo processing across replicas. A maintenance loop reaps jobs left
-// running by a crashed worker and evicts old terminal jobs.
+// Package worker drains the durable job queue: it claims jobs, runs them, and
+// records the outcome. Workers run concurrently, and the queue's per-repo
+// serialisation gives at-most-one-per-repo processing across replicas. A
+// maintenance loop reaps jobs a crashed worker left running and evicts old ones.
 package worker
 
 import (
@@ -16,6 +15,7 @@ import (
 
 	"quisac/internal/core"
 	"quisac/internal/db"
+	"quisac/internal/resolve"
 )
 
 // Exported process counters, published at /debug/vars.
@@ -39,12 +39,23 @@ type Indexer interface {
 	ProcessPush(ctx context.Context, installationID, repo, before, after string, changed []string, complete bool) error
 }
 
+// Resolver runs the incident fix pipeline. Satisfied by *resolve.Resolver, and
+// may be nil: a deployment without one still indexes and serves the graph.
+type Resolver interface {
+	Resolve(ctx context.Context, incidentID string) (resolve.Outcome, error)
+}
+
 // PushPayload is the JSON stored in a push job's payload column.
 type PushPayload struct {
 	Before   string   `json:"before"`
 	After    string   `json:"after"`
 	Changed  []string `json:"changed"`
 	Complete bool     `json:"complete"`
+}
+
+// ResolvePayload is the JSON stored in a resolve job's payload column.
+type ResolvePayload struct {
+	IncidentID string `json:"incident_id"`
 }
 
 // Config tunes the pool. Zero values fall back to sensible defaults.
@@ -85,6 +96,7 @@ func (c Config) withDefaults() Config {
 type Pool struct {
 	q    Queue
 	ix   Indexer
+	rs   Resolver
 	log  *slog.Logger
 	cfg  Config
 	wake chan struct{}
@@ -101,9 +113,15 @@ func New(q Queue, ix Indexer, log *slog.Logger, cfg Config) *Pool {
 	}
 }
 
-// Wake nudges an idle worker to poll immediately. It is a latency optimisation
-// for work enqueued in this process; cross-replica work is still found by the
-// idle poll. Non-blocking: a pending wake coalesces.
+// WithResolver attaches the incident fix pipeline, enabling resolve jobs.
+func (p *Pool) WithResolver(rs Resolver) *Pool {
+	p.rs = rs
+	return p
+}
+
+// Wake nudges an idle worker to poll immediately, for work enqueued in this
+// process; other replicas' work is found by the idle poll. A pending wake
+// coalesces, and this never blocks.
 func (p *Pool) Wake() {
 	select {
 	case p.wake <- struct{}{}:
@@ -169,10 +187,9 @@ func (p *Pool) claimAndRun(ctx context.Context) (bool, error) {
 	return true, nil
 }
 
-// process runs a claimed job and records its outcome. It uses a fresh,
-// timeout-bounded context (not the shutdown context) so a job that has already
-// started runs to completion during a graceful shutdown; a worker that dies
-// mid-job leaves the row 'running' for the reaper to recover.
+// process runs a claimed job and records its outcome, on a fresh timeout-bounded
+// context rather than the shutdown one so a started job finishes during a
+// graceful shutdown. A worker that dies mid-job leaves the row for the reaper.
 func (p *Pool) process(job db.Job) {
 	ctx, cancel := context.WithTimeout(context.Background(), p.cfg.JobTimeout)
 	defer cancel()
@@ -216,6 +233,20 @@ func (p *Pool) run(ctx context.Context, job db.Job) ([]byte, error) {
 			return nil, fmt.Errorf("decode push payload: %w", err)
 		}
 		return nil, p.ix.ProcessPush(ctx, job.InstallationID, job.Repo, pl.Before, pl.After, pl.Changed, pl.Complete)
+	case db.JobResolve:
+		var pl ResolvePayload
+		if err := json.Unmarshal(job.Payload, &pl); err != nil {
+			return nil, fmt.Errorf("decode resolve payload: %w", err)
+		}
+		if p.rs == nil {
+			return nil, fmt.Errorf("no resolver configured")
+		}
+		outcome, err := p.rs.Resolve(ctx, pl.IncidentID)
+		if err != nil {
+			return nil, err
+		}
+		// Stored on the job, so a run is auditable from the queue alone.
+		return json.Marshal(outcome)
 	default:
 		return nil, fmt.Errorf("unknown job kind %q", job.Kind)
 	}

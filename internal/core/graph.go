@@ -9,26 +9,33 @@ import (
 
 type Node struct {
 	ID   string `json:"id"`
-	Type string `json:"type"` // File | Class | Function | Method | Module | Variable
+	Type string `json:"type"` // File | Class | Function | Method | Variable
 	Name string `json:"name"`
 }
 
 type Edge struct {
 	From string `json:"from"`
 	To   string `json:"to"`
-	Type string `json:"type"` // Imports | Contains | Calls | Instantiates | Inherits | Decorates
+	Type string `json:"type"` // Imports | Contains | Calls | Instantiates | Inherits
 }
 
-// Graph is an in-memory code graph. It is used both for a full repo index and
-// for a single-file subgraph during incremental updates.
+// Graph is an in-memory code graph, used both for a full repo index and for a
+// single-file subgraph during incremental updates.
+//
+// Only symbols that exist in the repository become nodes. A name the parser
+// cannot place inside the repo — an npm package, the standard library, a base
+// class from a dependency — is recorded on the importing file in RawImports
+// instead. Synthesising a node per unresolved name was 60% of the nodes and half
+// the edges on this repository, and none of it could reach a traversal result:
+// such a node has no outgoing edge, so no path runs through it to a failure.
 type Graph struct {
 	Nodes map[string]*Node `json:"nodes"`
 	Edges []Edge           `json:"edges"`
 
-	// RawImports maps a file's repo-relative path to its raw import strings. It
-	// feeds import resolution and is persisted so incremental updates can resolve
-	// without re-parsing unchanged files.
-	RawImports map[string][]string `json:"-"`
+	// RawImports maps a repo-relative path to its raw import strings. It feeds
+	// import resolution, is persisted so incremental updates resolve without
+	// re-parsing, and is how a viewer sees a file's external dependencies.
+	RawImports map[string][]string `json:"raw_imports,omitempty"`
 
 	// edgeSet deduplicates Edges in O(1) as they are added.
 	edgeSet map[string]struct{}
@@ -62,7 +69,6 @@ func fileID(path string) string              { return "file:" + path }
 func classID(path, name string) string       { return "class:" + path + "::" + name }
 func funcID(path, name string) string        { return "func:" + path + "::" + name }
 func methodID(path, qualified string) string { return "method:" + path + "::" + qualified }
-func moduleID(name string) string            { return "module:" + name }
 func varID(path, name string) string         { return "var:" + path + "::" + name }
 
 // AddFile adds a parsed file's symbols and intra-file edges to the graph.
@@ -76,12 +82,6 @@ func (g *Graph) AddFile(e *astparsers.Extracted) {
 		g.RawImports[fp] = e.Imports
 	}
 
-	for _, imp := range e.Imports {
-		modName := firstToken(imp)
-		g.addNode(moduleID(modName), "Module", modName)
-		g.addEdge(fileID(fp), moduleID(modName), "Imports")
-	}
-
 	for _, cls := range e.Classes {
 		g.addNode(classID(fp, cls), "Class", cls)
 		g.addEdge(fileID(fp), classID(fp, cls), "Contains")
@@ -93,13 +93,11 @@ func (g *Graph) AddFile(e *astparsers.Extracted) {
 			continue
 		}
 		child, parent := parts[0], parts[1]
-		childID := classID(fp, child)
 		parentID := classID(fp, parent)
 		if _, ok := g.Nodes[parentID]; !ok {
-			g.addNode(moduleID(parent), "Module", parent)
-			parentID = moduleID(parent)
+			continue // parent lives outside this file — an external reference
 		}
-		g.addEdge(childID, parentID, "Inherits")
+		g.addEdge(classID(fp, child), parentID, "Inherits")
 	}
 
 	for _, fn := range e.Functions {
@@ -123,22 +121,18 @@ func (g *Graph) AddFile(e *astparsers.Extracted) {
 		fromID := g.scopeToID(fp, c.CallerScope)
 		switch c.Kind {
 		case "method_call":
-			toID := methodID(fp, c.Target)
-			if g.Nodes[toID] == nil {
-				g.addNode(moduleID(c.Target), "Module", c.Target)
-				toID = moduleID(c.Target)
+			if toID := methodID(fp, c.Target); g.Nodes[toID] != nil {
+				g.addEdge(fromID, toID, "Calls")
 			}
-			g.addEdge(fromID, toID, "Calls")
 		case "instantiation":
-			g.addEdge(fromID, resolveCall(fp, c.Target, g), "Instantiates")
+			if toID, ok := resolveCall(fp, c.Target, g); ok {
+				g.addEdge(fromID, toID, "Instantiates")
+			}
 		default:
-			g.addEdge(fromID, resolveCall(fp, c.Target, g), "Calls")
+			if toID, ok := resolveCall(fp, c.Target, g); ok {
+				g.addEdge(fromID, toID, "Calls")
+			}
 		}
-	}
-
-	for _, d := range e.DecoratorUses {
-		g.addNode(moduleID(d.Name), "Module", d.Name)
-		g.addEdge(moduleID(d.Name), g.decoratorTargetID(fp, d.TargetScope), "Decorates")
 	}
 
 	for _, v := range e.GlobalVariables {
@@ -189,42 +183,20 @@ func (g *Graph) scopeToID(filePath, scope string) string {
 	}
 }
 
-func (g *Graph) decoratorTargetID(filePath, targetScope string) string {
-	switch {
-	case strings.HasPrefix(targetScope, "func:"):
-		return funcID(filePath, strings.TrimPrefix(targetScope, "func:"))
-	case strings.HasPrefix(targetScope, "method:"):
-		return methodID(filePath, strings.TrimPrefix(targetScope, "method:"))
-	case strings.HasPrefix(targetScope, "class:"):
-		return classID(filePath, strings.TrimPrefix(targetScope, "class:"))
-	default:
-		return fileID(filePath)
-	}
-}
-
-func resolveCall(filePath, name string, g *Graph) string {
+// resolveCall maps a call target to a symbol declared in the same file. An
+// unresolved target names something the file cannot see, and produces no edge.
+func resolveCall(filePath, name string, g *Graph) (string, bool) {
 	if id := funcID(filePath, name); g.Nodes[id] != nil {
-		return id
+		return id, true
 	}
 	if id := classID(filePath, name); g.Nodes[id] != nil {
-		return id
+		return id, true
 	}
-	g.addNode(moduleID(name), "Module", name)
-	return moduleID(name)
-}
-
-func firstToken(imp string) string {
-	imp = strings.TrimSpace(imp)
-	if strings.HasPrefix(imp, "from ") || strings.HasPrefix(imp, "import ") {
-		if parts := strings.Fields(imp); len(parts) >= 2 {
-			return parts[1]
-		}
-	}
-	return imp
+	return "", false
 }
 
 func (g *Graph) ToJSON() (string, error) {
-	b, err := json.MarshalIndent(g, "", "  ")
+	b, err := json.Marshal(g)
 	if err != nil {
 		return "", err
 	}

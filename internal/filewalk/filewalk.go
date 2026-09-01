@@ -1,10 +1,12 @@
 package filewalk
 
 import (
-	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
+	"sync"
 
 	"quisac/internal/astparsers"
 	"quisac/internal/core"
@@ -18,9 +20,8 @@ var supported = map[string]bool{
 	".ts": true, ".tsx": false,
 }
 
-// skipDirs are directories that hold dependencies or generated/build output —
-// never first-party source. Parsing them (especially minified bundles under
-// .next/dist) produces enormous, meaningless symbols.
+// skipDirs hold dependencies or build output, never first-party source. Parsing
+// them produces enormous, meaningless symbols.
 var skipDirs = map[string]bool{
 	".git": true, "node_modules": true, "__pycache__": true,
 	"vendor": true, "dist": true, "build": true,
@@ -28,83 +29,40 @@ var skipDirs = map[string]bool{
 	"out": true, "coverage": true, ".cache": true, ".turbo": true,
 }
 
-// MaxFileBytes skips files too large to be hand-written source. Minified or
-// generated blobs blow past this; real source files effectively never do.
+// MaxFileBytes skips files too large to be hand-written source.
 const MaxFileBytes = 1 << 20 // 1 MiB
 
-// ReadRepo builds a dependency graph from all supported source files under dir.
+// ReadRepo builds a dependency graph from every supported source file under dir,
+// in three passes:
 //
-// It runs in two passes:
-//
-//  1. AST pass — every file is parsed and its symbols (functions, classes,
-//     imports, calls) are added to the graph as nodes and raw edges.
-//
-//  2. Resolution pass — each file's raw import strings are resolved against
-//     the actual filesystem. When a match is found inside the repo, a direct
-//     file→file "Imports" edge is added, making the graph traversable across
-//     module boundaries.
+//  1. Scan — collect the paths worth parsing, reading none of them.
+//  2. AST — parse those files across a bounded worker pool, then assemble the
+//     graph on one goroutine in scan order, so node insertion is deterministic.
+//  3. Resolution — resolve each file's raw imports against the files actually
+//     parsed. A match becomes a file→file Imports edge, which is what makes the
+//     graph traversable across module boundaries.
 func ReadRepo(repoRoot string) *core.Graph {
+	paths := scanRepo(repoRoot)
+	extracted := parseAll(repoRoot, paths)
+
 	graph := core.NewGraph()
-
-	var allExtracted []*astparsers.Extracted
-	// files is the repo manifest: the set of every parsed file's repo-relative
-	// path. Import resolution (Pass 2) is done against this set rather than the
-	// filesystem, so node IDs are stable across re-downloads and the same logic
-	// serves incremental updates that only have the manifest.
-	files := map[string]bool{}
-
-	// ── Pass 1: AST extraction ────────────────────────────────────────────────
-	err := filepath.Walk(repoRoot, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return err
+	// The manifest. Resolving against it rather than the filesystem keeps node
+	// IDs stable across re-downloads, and serves incremental updates unchanged.
+	files := make(map[string]bool, len(extracted))
+	for _, ex := range extracted {
+		if ex == nil {
+			continue
 		}
-		if info.IsDir() {
-			if skipDirs[info.Name()] {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-
-		ext := filepath.Ext(path)
-		if !supported[ext] {
-			return nil
-		}
-
-		// Skip minified/generated files (e.g. app.min.js) and anything too large
-		// to be hand-written — both are bundle output, not source.
-		if isMinified(info.Name()) || info.Size() > MaxFileBytes {
-			return nil
-		}
-
-		content, err := os.ReadFile(path)
-		if err != nil {
-			fmt.Printf("error reading %s: %v\n", path, err)
-			return nil
-		}
-
-		rel := relPath(repoRoot, path)
-
-		extracted, err := treesitter.ParseCode(content, ext, rel)
-		if err != nil {
-			fmt.Printf("error parsing %s: %v\n", path, err)
-			return nil
-		}
-
-		graph.AddFile(extracted)
-		allExtracted = append(allExtracted, extracted)
-		files[rel] = true
-		return nil
-	})
-
-	if err != nil {
-		fmt.Printf("error walking %s: %v\n", repoRoot, err)
+		graph.AddFile(ex)
+		files[ex.FilePath] = true
 	}
 
-	// ── Pass 2: Import resolution ─────────────────────────────────────────────
-	// Now that the manifest is complete, resolve raw import strings to concrete
-	// repo-relative paths and add direct file→file edges.
+	// Pass 3: import resolution.
 	resolved, unresolved := 0, 0
-	for _, ex := range allExtracted {
+	for _, ex := range extracted {
+		if ex == nil {
+			continue
+		}
 		ext := filepath.Ext(ex.FilePath)
 		for _, rawImport := range ex.Imports {
 			target := resolver.ResolveImport(files, ex.FilePath, rawImport, ext)
@@ -117,8 +75,86 @@ func ReadRepo(repoRoot string) *core.Graph {
 		}
 	}
 
-	fmt.Printf("import resolution: %d resolved, %d external/unresolved\n", resolved, unresolved)
+	slog.Info("repo indexed", "files", len(files), "nodes", len(graph.Nodes),
+		"edges", len(graph.Edges), "imports_resolved", resolved, "imports_external", unresolved)
 	return graph
+}
+
+// scanRepo returns the absolute paths of every file ReadRepo should parse.
+func scanRepo(repoRoot string) []string {
+	var paths []string
+	err := filepath.Walk(repoRoot, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if info.IsDir() {
+			if skipDirs[info.Name()] {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !supported[filepath.Ext(path)] {
+			return nil
+		}
+		// Both are bundle output, not source.
+		if isMinified(info.Name()) || info.Size() > MaxFileBytes {
+			return nil
+		}
+		paths = append(paths, path)
+		return nil
+	})
+	if err != nil {
+		slog.Warn("repo walk failed", "root", repoRoot, "err", err)
+	}
+	return paths
+}
+
+// parseAll parses paths concurrently, returning one result per input in the same
+// order, nil where a file could not be read or parsed.
+//
+// Each worker owns a tree-sitter session: the parsers are stateful and cannot be
+// shared, and building one per worker keeps setup out of the hot loop.
+func parseAll(repoRoot string, paths []string) []*astparsers.Extracted {
+	out := make([]*astparsers.Extracted, len(paths))
+	if len(paths) == 0 {
+		return out
+	}
+
+	workers := min(runtime.NumCPU(), len(paths))
+	idx := make(chan int)
+	var wg sync.WaitGroup
+
+	for range workers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			session := treesitter.NewSession()
+			defer session.Close()
+
+			for i := range idx {
+				path := paths[i]
+				content, err := os.ReadFile(path)
+				if err != nil {
+					slog.Warn("read file failed", "path", path, "err", err)
+					continue
+				}
+				rel := relPath(repoRoot, path)
+				ex, err := session.Parse(content, filepath.Ext(path), rel)
+				if err != nil {
+					slog.Warn("parse file failed", "path", rel, "err", err)
+					continue
+				}
+				out[i] = ex
+			}
+		}()
+	}
+
+	for i := range paths {
+		idx <- i
+	}
+	close(idx)
+	wg.Wait()
+	return out
 }
 
 // isMinified reports whether name looks like a minified/generated bundle, e.g.
@@ -138,10 +174,9 @@ func inSkipDir(path string) bool {
 	return false
 }
 
-// IsIndexable reports whether a repo-relative path is a first-party source file
-// we index: a supported extension, not minified, and not under a skipped
-// directory. It's the single predicate shared by the full walk and incremental
-// updates.
+// IsIndexable reports whether a path is first-party source: a supported
+// extension, not minified, not under a skipped directory. Shared by the full
+// walk and incremental updates.
 func IsIndexable(path string) bool {
 	path = filepath.ToSlash(path)
 	return supported[filepath.Ext(path)] &&
@@ -149,9 +184,8 @@ func IsIndexable(path string) bool {
 		!inSkipDir(path)
 }
 
-// ParseFile builds a single-file subgraph — the file's nodes and intra-file
-// edges — from its content. It carries no cross-file import edges; those are
-// resolved by the caller against the repo manifest.
+// ParseFile builds a single-file subgraph: nodes and intra-file edges only.
+// Cross-file imports are resolved by the caller against the repo manifest.
 func ParseFile(path string, content []byte) (*core.Graph, error) {
 	path = filepath.ToSlash(path)
 	extracted, err := treesitter.ParseCode(content, filepath.Ext(path), path)
@@ -163,8 +197,8 @@ func ParseFile(path string, content []byte) (*core.Graph, error) {
 	return g, nil
 }
 
-// relPath returns path relative to repoRoot in forward-slash form. It falls back
-// to the cleaned original path if a relative path can't be computed.
+// relPath returns path relative to repoRoot in forward-slash form, falling back
+// to the cleaned original.
 func relPath(repoRoot, path string) string {
 	rel, err := filepath.Rel(repoRoot, path)
 	if err != nil {

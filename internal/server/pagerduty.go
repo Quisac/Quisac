@@ -3,18 +3,23 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"strings"
 
+	"quisac/internal/core"
 	"quisac/internal/db"
 	"quisac/internal/pagerduty"
 	"quisac/internal/traverse"
+	"quisac/internal/worker"
 )
 
-// handlePagerDuty receives PagerDuty V3 webhooks, verifies the signature, and
-// persists the incident. No traversal happens here — the user triggers that
-// manually from the Incidents view via POST /api/incidents/{id}/traverse.
+// handlePagerDuty receives PagerDuty V3 webhooks, verifies the signature,
+// persists the incident, and queues it for resolution.
+//
+// Resolution is a durable job rather than a goroutine: it spends model tokens
+// and can open pull requests, so it must survive the process restarting.
 func (s *Server) handlePagerDuty(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -29,9 +34,16 @@ func (s *Server) handlePagerDuty(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if !pagerduty.VerifySignature(s.cfg.Server.SessionSecret, body, r.Header.Get("X-PagerDuty-Signature")) {
-		s.logf(r).Warn("invalid pagerduty signature — proceeding in dev mode")
-		// In production tighten this to: http.Error(w, "invalid signature", 401); return
+	// An accepted delivery spends model tokens and can open a pull request, so a
+	// forged one is not a nuisance. VerifySignature passes everything when no
+	// secret is configured, which is the documented local-dev path only.
+	secret := s.cfg.Server.PagerDutyWebhookSecret
+	if secret == "" {
+		s.logf(r).Warn("PAGERDUTY_WEBHOOK_SECRET unset — accepting deliveries unverified")
+	} else if !pagerduty.VerifySignature(secret, body, r.Header.Get("X-PagerDuty-Signature")) {
+		s.logf(r).Warn("rejected pagerduty delivery: invalid signature")
+		http.Error(w, "invalid signature", http.StatusUnauthorized)
+		return
 	}
 
 	var payload pagerduty.WebhookPayload
@@ -62,55 +74,131 @@ func (s *Server) handlePagerDuty(w http.ResponseWriter, r *http.Request) {
 		Urgency:        payload.Event.Data.Urgency,
 		ErrorBody:      inc.ErrorBody,
 	}); err != nil {
+		// Fail the delivery so PagerDuty retries: an incident we did not store is
+		// an incident we will never resolve.
 		s.logf(r).Error("store incident", "err", err)
-		// Don't fail the webhook — PagerDuty retries on non-2xx.
+		http.Error(w, "could not store incident", http.StatusInternalServerError)
+		return
+	}
+
+	if err := s.enqueueResolve(r.Context(), inc.ID, installationID); err != nil {
+		s.logf(r).Error("enqueue resolution", "err", err, "incident", inc.ID)
+		http.Error(w, "could not queue resolution", http.StatusInternalServerError)
+		return
 	}
 
 	w.WriteHeader(http.StatusAccepted)
-
-	// Automatically run traversal in the background.
-	if s.traverser != nil {
-		go s.autoTraverseIncident(inc.ID, inc, installationID)
-	}
 }
 
-func (s *Server) autoTraverseIncident(incidentID string, inc traverse.Incident, installationID string) {
-	ctx := context.Background() // new context for background work
-
-	_ = s.incidents.MarkTraversing(ctx, incidentID)
-
-	repos, err := s.incidents.ListIndexedRepos(ctx, installationID)
-	if err != nil || len(repos) == 0 {
-		s.log.Error("no indexed repos for traversal")
-		_ = s.incidents.FailIncidentTraversal(ctx, incidentID)
-		return
+// enqueueResolve queues the fix pipeline for an incident. The job is filed under
+// a per-incident key because the repository is not known until traversal runs,
+// and an alert must not wait behind a long index of the repo it will analyse.
+func (s *Server) enqueueResolve(ctx context.Context, incidentID, installationID string) error {
+	payload, err := json.Marshal(worker.ResolvePayload{IncidentID: incidentID})
+	if err != nil {
+		return err
+	}
+	jobID, err := randomState()
+	if err != nil {
+		return err
 	}
 
-	var bestResult *traverse.Result
-	for _, repo := range repos {
-		res, err := s.traverser.Run(ctx, repo, inc, 5)
-		if err != nil {
-			s.log.Warn("auto traversal skipped for repo", "repo", repo, "err", err)
-			continue
-		}
-		if bestResult == nil || len(res.Candidates) > len(bestResult.Candidates) {
-			bestResult = res
-		}
+	if err := s.queue.EnqueueJob(ctx, db.Job{
+		ID:             jobID[:16],
+		Kind:           db.JobResolve,
+		Repo:           db.ResolveRepoKey(incidentID),
+		InstallationID: installationID,
+		Payload:        payload,
+		// Resolution costs tokens and can open a PR, so give up early.
+		MaxAttempts: 2,
+	}); err != nil {
+		return err
 	}
-
-	if bestResult == nil {
-		_ = s.incidents.FailIncidentTraversal(ctx, incidentID)
-		return
-	}
-
-	if err := s.incidents.UpdateIncidentResult(ctx, incidentID,
-		bestResult.Repo, bestResult.EntryPoint, bestResult.Candidates); err != nil {
-		s.log.Error("store auto traversal result", "err", err)
-	}
+	s.waker.Wake()
+	return nil
 }
 
-// handleIncidents serves GET /api/incidents — returns the list of all incidents
-// so the frontend can render the Incidents view.
+// incidentRow is the JSON shape the Incidents view renders.
+type incidentRow struct {
+	ID          string  `json:"id"`
+	PDNumber    int     `json:"pd_number"`
+	Title       string  `json:"title"`
+	ServiceName string  `json:"service_name"`
+	Urgency     string  `json:"urgency"`
+	ErrorBody   string  `json:"error_body"`
+	Status      string  `json:"status"`
+	Repo        string  `json:"repo,omitempty"`
+	EntryPoint  any     `json:"entry_point,omitempty"`
+	Candidates  any     `json:"candidates,omitempty"`
+	ReceivedAt  string  `json:"received_at"`
+	TraversedAt *string `json:"traversed_at,omitempty"`
+
+	Resolution resolutionRow `json:"resolution"`
+}
+
+// resolutionRow is the fix pipeline's outcome, as the UI consumes it.
+type resolutionRow struct {
+	Status     string  `json:"status"`
+	Method     string  `json:"method,omitempty"`
+	RootCause  string  `json:"root_cause,omitempty"`
+	Confidence float64 `json:"confidence"`
+	Summary    string  `json:"summary,omitempty"`
+	Files      any     `json:"files,omitempty"`
+	PRURL      string  `json:"pr_url,omitempty"`
+	PRNumber   int     `json:"pr_number,omitempty"`
+	Branch     string  `json:"branch,omitempty"`
+	// Tokens is zero when the incident was resolved from structure and cache alone.
+	Tokens     int     `json:"tokens"`
+	Error      string  `json:"error,omitempty"`
+	ResolvedAt *string `json:"resolved_at,omitempty"`
+}
+
+func toIncidentRow(inc db.Incident) incidentRow {
+	row := incidentRow{
+		ID:          inc.ID,
+		PDNumber:    inc.PDNumber,
+		Title:       inc.Title,
+		ServiceName: inc.ServiceName,
+		Urgency:     inc.Urgency,
+		ErrorBody:   inc.ErrorBody,
+		Status:      inc.Status,
+		Repo:        inc.Repo,
+		ReceivedAt:  inc.ReceivedAt.Format("2006-01-02T15:04:05Z"),
+		Resolution: resolutionRow{
+			Status:     inc.Resolution.Status,
+			Method:     inc.Resolution.Method,
+			RootCause:  inc.Resolution.RootCause,
+			Confidence: float64(inc.Resolution.Confidence),
+			Summary:    inc.Resolution.Summary,
+			PRURL:      inc.Resolution.PRURL,
+			PRNumber:   inc.Resolution.PRNumber,
+			Branch:     inc.Resolution.Branch,
+			Tokens:     inc.Resolution.InputTokens + inc.Resolution.OutputTokens,
+			Error:      inc.Resolution.Error,
+		},
+	}
+	if inc.TraversedAt != nil {
+		t := inc.TraversedAt.Format("2006-01-02T15:04:05Z")
+		row.TraversedAt = &t
+	}
+	if inc.Resolution.ResolvedAt != nil {
+		t := inc.Resolution.ResolvedAt.Format("2006-01-02T15:04:05Z")
+		row.Resolution.ResolvedAt = &t
+	}
+	// Already JSON; decode so they nest rather than arriving escaped.
+	if len(inc.EntryPoint) > 0 {
+		json.Unmarshal(inc.EntryPoint, &row.EntryPoint)
+	}
+	if len(inc.Candidates) > 0 {
+		json.Unmarshal(inc.Candidates, &row.Candidates)
+	}
+	if len(inc.Resolution.Files) > 0 {
+		json.Unmarshal(inc.Resolution.Files, &row.Resolution.Files)
+	}
+	return row
+}
+
+// handleIncidents serves GET /api/incidents — the list the Incidents view polls.
 func (s *Server) handleIncidents(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -129,144 +217,155 @@ func (s *Server) handleIncidents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	type row struct {
-		ID          string  `json:"id"`
-		PDNumber    int     `json:"pd_number"`
-		Title       string  `json:"title"`
-		ServiceName string  `json:"service_name"`
-		Urgency     string  `json:"urgency"`
-		ErrorBody   string  `json:"error_body"`
-		Status      string  `json:"status"`
-		Repo        string  `json:"repo,omitempty"`
-		EntryPoint  any     `json:"entry_point,omitempty"`
-		Candidates  any     `json:"candidates,omitempty"`
-		ReceivedAt  string  `json:"received_at"`
-		TraversedAt *string `json:"traversed_at,omitempty"`
-	}
-
-	out := make([]row, 0, len(incidents))
+	out := make([]incidentRow, 0, len(incidents))
 	for _, inc := range incidents {
-		r2 := row{
-			ID:          inc.ID,
-			PDNumber:    inc.PDNumber,
-			Title:       inc.Title,
-			ServiceName: inc.ServiceName,
-			Urgency:     inc.Urgency,
-			ErrorBody:   inc.ErrorBody,
-			Status:      inc.Status,
-			Repo:        inc.Repo,
-			ReceivedAt:  inc.ReceivedAt.Format("2006-01-02T15:04:05Z"),
-		}
-		if inc.TraversedAt != nil {
-			t := inc.TraversedAt.Format("2006-01-02T15:04:05Z")
-			r2.TraversedAt = &t
-		}
-		if len(inc.EntryPoint) > 0 {
-			json.Unmarshal(inc.EntryPoint, &r2.EntryPoint)
-		}
-		if len(inc.Candidates) > 0 {
-			json.Unmarshal(inc.Candidates, &r2.Candidates)
-		}
-		out = append(out, r2)
+		out = append(out, toIncidentRow(inc))
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(out)
 }
 
-// handleIncidentTraverse handles POST /api/incidents/{id}/traverse.
-// It auto-detects the best-matching repo from the user's indexed repos,
-// runs BFS traversal, and stores the result back to the DB.
-func (s *Server) handleIncidentTraverse(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
+// handleIncidentRoute dispatches the per-incident subroutes:
+//
+//	POST   /api/incidents/{id}/resolve  — re-run the fix pipeline
+//	GET    /api/incidents/{id}/graph    — the fault subgraph behind the traversal
+//	DELETE /api/incidents/{id}          — the engineer closed it out; drop the row
+//
+// /traverse is accepted as an alias for /resolve: traversal is no longer a stage
+// a caller can run on its own, it is the middle tier of the same pipeline.
+func (s *Server) handleIncidentRoute(w http.ResponseWriter, r *http.Request) {
 	sd, ok := s.session(r)
 	if !ok {
 		http.Error(w, "not connected", http.StatusUnauthorized)
 		return
 	}
 
-	// /api/incidents/{id}/traverse  →  extract {id}
+	// /api/incidents/{id}/{action}
 	parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/api/incidents/"), "/")
 	if len(parts) == 0 || parts[0] == "" {
 		http.Error(w, "missing incident id", http.StatusBadRequest)
 		return
 	}
 	incidentID := parts[0]
+	action := ""
+	if len(parts) > 1 {
+		action = parts[1]
+	}
 
 	inc, err := s.incidents.GetIncident(r.Context(), incidentID)
 	if err != nil {
 		http.Error(w, "incident not found", http.StatusNotFound)
 		return
 	}
-	if inc.Status == "traversed" {
-		// Already done — return the cached result immediately.
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]any{
-			"status":      "traversed",
-			"repo":        inc.Repo,
-			"entry_point": json.RawMessage(inc.EntryPoint),
-			"candidates":  json.RawMessage(inc.Candidates),
-		})
-		return
-	}
-	if s.traverser == nil {
-		http.Error(w, "traversal engine unavailable (Neo4j not connected)", http.StatusServiceUnavailable)
+	// An incident belongs to the installation that received it; a session for a
+	// different installation must not be able to read it or trigger work against
+	// it.
+	if inc.InstallationID != sd.InstallationID {
+		http.Error(w, "incident not found", http.StatusNotFound)
 		return
 	}
 
-	// Mark as traversing so the UI can show a spinner.
-	_ = s.incidents.MarkTraversing(r.Context(), incidentID)
-
-	// Find all repos this installation has indexed.
-	repos, err := s.incidents.ListIndexedRepos(r.Context(), sd.InstallationID)
-	if err != nil || len(repos) == 0 {
-		s.logf(r).Error("no indexed repos for traversal")
-		_ = s.incidents.FailIncidentTraversal(r.Context(), incidentID)
-		http.Error(w, "no indexed repositories found; index a repo first", http.StatusUnprocessableEntity)
-		return
-	}
-
-	incident := traverse.Incident{
-		ID:          inc.ID,
-		Title:       inc.Title,
-		ServiceName: inc.ServiceName,
-		ErrorBody:   inc.ErrorBody,
-	}
-
-	// Try each indexed repo and pick the result with the most candidates.
-	// The repo whose graph best matches the error terms wins.
-	var bestResult *traverse.Result
-	for _, repo := range repos {
-		res, err := s.traverser.Run(r.Context(), repo, incident, 5)
-		if err != nil {
-			s.logf(r).Warn("traversal skipped for repo", "repo", repo, "err", err)
-			continue
+	if action == "graph" {
+		if r.Method != http.MethodGet {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
 		}
-		if bestResult == nil || len(res.Candidates) > len(bestResult.Candidates) {
-			bestResult = res
-		}
-	}
-
-	if bestResult == nil {
-		_ = s.incidents.FailIncidentTraversal(r.Context(), incidentID)
-		http.Error(w, "could not find a matching entry point in any indexed repo", http.StatusNotFound)
+		s.serveFaultGraph(w, r, inc)
 		return
 	}
 
-	// Persist the result.
-	if err := s.incidents.UpdateIncidentResult(r.Context(), incidentID,
-		bestResult.Repo, bestResult.EntryPoint, bestResult.Candidates); err != nil {
-		s.logf(r).Error("store traversal result", "err", err)
+	// Marking an incident resolved deletes it. The learned fix survives in
+	// incident_patterns, which is keyed by fingerprint rather than by incident,
+	// so clearing the feed costs the pattern cache nothing.
+	if r.Method == http.MethodDelete && action == "" {
+		if err := s.incidents.DeleteIncident(r.Context(), incidentID, sd.InstallationID); err != nil {
+			if errors.Is(err, db.ErrNotFound) {
+				http.Error(w, "incident not found", http.StatusNotFound)
+				return
+			}
+			s.logf(r).Error("delete incident", "err", err, "incident", incidentID)
+			http.Error(w, "could not delete incident", http.StatusInternalServerError)
+			return
+		}
+		s.logf(r).Info("incident resolved and deleted", "incident", incidentID)
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if inc.Resolution.Status == "resolving" {
+		w.WriteHeader(http.StatusAccepted)
+		json.NewEncoder(w).Encode(map[string]any{"status": "resolving"})
+		return
+	}
+
+	if err := s.enqueueResolve(r.Context(), incidentID, sd.InstallationID); err != nil {
+		s.logf(r).Error("enqueue resolution", "err", err, "incident", incidentID)
+		http.Error(w, "could not queue resolution", http.StatusInternalServerError)
+		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{
-		"status":      "traversed",
-		"repo":        bestResult.Repo,
-		"entry_point": bestResult.EntryPoint,
-		"candidates":  bestResult.Candidates,
+	w.WriteHeader(http.StatusAccepted)
+	json.NewEncoder(w).Encode(map[string]any{"status": "resolving"})
+}
+
+// serveFaultGraph answers GET /api/incidents/{id}/graph with the subgraph that
+// connects the incident's ranked candidates back to its entry point.
+//
+// The ranking itself is read from the incident row — it is the result that was
+// stored when the traversal ran, not a fresh walk. Only the paths are queried
+// live, so what is drawn is the graph as it exists now, annotated with the
+// scores as they were then.
+func (s *Server) serveFaultGraph(w http.ResponseWriter, r *http.Request, inc db.Incident) {
+	if s.faults == nil {
+		http.Error(w, "graph queries unavailable", http.StatusServiceUnavailable)
+		return
+	}
+
+	var entry core.Node
+	if len(inc.EntryPoint) > 0 {
+		json.Unmarshal(inc.EntryPoint, &entry)
+	}
+	var candidates []traverse.CandidateNode
+	if len(inc.Candidates) > 0 {
+		json.Unmarshal(inc.Candidates, &candidates)
+	}
+
+	// No traversal has landed yet (a pattern-cache hit never runs one), so there
+	// is nothing to draw. That is an empty answer, not an error.
+	if inc.Repo == "" || entry.ID == "" {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(traverse.FaultGraph{
+			Repo:  inc.Repo,
+			Nodes: []traverse.FaultNode{},
+			Edges: []core.Edge{},
+		})
+		return
+	}
+
+	fg, err := s.faults.FaultGraph(r.Context(), traverse.FaultQuery{
+		Repo:          inc.Repo,
+		EntryPointIDs: []string{entry.ID},
+		Candidates:    candidates,
+		MaxDepth:      int(s.cfg.Resolution.MaxDepth),
 	})
+	if err != nil {
+		s.logf(r).Error("fault graph", "err", err, "incident", inc.ID, "repo", inc.Repo)
+		http.Error(w, "could not read fault graph", http.StatusInternalServerError)
+		return
+	}
+	if fg.Nodes == nil {
+		fg.Nodes = []traverse.FaultNode{}
+	}
+	if fg.Edges == nil {
+		fg.Edges = []core.Edge{}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(fg)
 }

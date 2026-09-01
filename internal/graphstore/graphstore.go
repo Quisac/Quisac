@@ -3,18 +3,24 @@
 // Data model:
 //
 //	(:Repo {full_name, head_sha, indexed_at})
-//	(:Symbol:<Type> {repo, id, name, type, path[, raw_imports]})   Type ∈ File|Class|Function|Method|Module|Variable
-//	(a:Symbol)-[:IMPORTS|CONTAINS|CALLS|INSTANTIATES|INHERITS|DECORATES]->(b:Symbol)
+//	(:Symbol:<Type> {repo, id, name, type, path[, raw_imports]})   Type ∈ File|Class|Function|Method|Variable
+//	(a:Symbol)-[:IMPORTS|CONTAINS|CALLS|INSTANTIATES|INHERITS]->(b:Symbol)
 //
 // Every symbol carries a `repo` property so one instance holds many
 // repositories; (repo, id) is unique. Writes are surgical: a full index
 // replaces the whole repo subgraph, while an incremental update rewrites only
 // the changed files (by their `path`) and the affected import edges.
+//
+// A full index is deliberately not one transaction: a repository large enough to
+// matter produces more pending changes than one can hold. The head SHA is
+// written last, so an index that dies half-way leaves no head and the next push
+// re-indexes rather than trusting a partial graph.
 package graphstore
 
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"strings"
 
 	"quisac/internal/core"
@@ -25,14 +31,21 @@ import (
 // batchSize caps rows per UNWIND so large repos don't build one huge payload.
 const batchSize = 1000
 
-// maxIndexableIDBytes bounds a node ID's size — Neo4j's RANGE index (behind the
-// (repo, id) constraint) rejects values larger than ~8KB. An oversized ID means
-// the parser captured a blob as a symbol; we skip it rather than fail the write.
+// Ceilings on uncommitted state: rows per transaction on the full-index path,
+// and nodes detached per inner transaction when a repo is cleared.
+const (
+	writeBatchSize  = 5000
+	deleteBatchSize = 10000
+)
+
+// maxIndexableIDBytes matches the ~8KB ceiling Neo4j's RANGE index enforces
+// behind the (repo, id) constraint. An oversized ID means the parser captured a
+// blob as a symbol, so it is skipped rather than failing the write.
 const maxIndexableIDBytes = 8000
 
 var nodeLabels = map[string]string{
 	"File": "File", "Class": "Class", "Function": "Function",
-	"Method": "Method", "Module": "Module", "Variable": "Variable",
+	"Method": "Method", "Variable": "Variable",
 }
 
 var edgeRels = map[string]string{
@@ -77,8 +90,7 @@ func (s *Store) Close(ctx context.Context) error {
 	return s.driver.Close(ctx)
 }
 
-// Driver returns the underlying Neo4j driver. Used by the traverse package to
-// run BFS Cypher queries that go beyond graphstore's higher-level API surface.
+// Driver returns the underlying Neo4j driver, for traversal's own Cypher.
 func (s *Store) Driver() neo4j.DriverWithContext {
 	return s.driver
 }
@@ -93,6 +105,11 @@ func (s *Store) ensureSchema(ctx context.Context) error {
 		for _, stmt := range []string{
 			`CREATE CONSTRAINT symbol_repo_id IF NOT EXISTS FOR (n:Symbol) REQUIRE (n.repo, n.id) IS UNIQUE`,
 			`CREATE CONSTRAINT repo_full_name IF NOT EXISTS FOR (r:Repo) REQUIRE r.full_name IS UNIQUE`,
+			// (repo, id) is the identity index, but incremental writes, the
+			// manifest, and traversal all query by path — without these, each is
+			// a label scan over every symbol in the instance.
+			`CREATE INDEX symbol_repo_path IF NOT EXISTS FOR (n:Symbol) ON (n.repo, n.path)`,
+			`CREATE INDEX file_repo_path IF NOT EXISTS FOR (n:File) ON (n.repo, n.path)`,
 		} {
 			if _, err := tx.Run(ctx, stmt, nil); err != nil {
 				return err
@@ -104,26 +121,40 @@ func (s *Store) ensureSchema(ctx context.Context) error {
 
 // SaveGraph replaces the entire subgraph for repo with g and records headSHA.
 func (s *Store) SaveGraph(ctx context.Context, repo, headSHA string, g *core.Graph) error {
-	err := s.write(ctx, func(tx neo4j.ManagedTransaction) error {
-		if _, err := tx.Run(ctx, `MATCH (n:Symbol {repo:$repo}) DETACH DELETE n`, args{"repo": repo}); err != nil {
-			return err
-		}
-		if _, err := tx.Run(ctx,
-			`MERGE (r:Repo {full_name:$repo}) SET r.head_sha=$sha, r.indexed_at=datetime()`,
-			args{"repo": repo, "sha": headSHA}); err != nil {
-			return err
-		}
-		return writeSubgraph(ctx, tx, repo, g)
-	})
-	if err != nil {
+	if err := s.clearRepo(ctx, repo); err != nil {
 		return fmt.Errorf("graphstore: save graph %q: %w", repo, err)
 	}
-	return nil
+	if err := s.writeSubgraphBatched(ctx, repo, g); err != nil {
+		return fmt.Errorf("graphstore: save graph %q: %w", repo, err)
+	}
+	// Last, on purpose: the head marks the graph complete, and ProcessPush
+	// re-indexes a headless repo in full.
+	return s.SetHead(ctx, repo, headSHA)
+}
+
+// clearRepo removes every symbol of a repo, committing as it goes. CALL … IN
+// TRANSACTIONS cannot run inside an explicit transaction, which is the point:
+// deleting a large repo's symbols in one exhausts the server's heap.
+func (s *Store) clearRepo(ctx context.Context, repo string) error {
+	session := s.driver.NewSession(ctx, neo4j.SessionConfig{AccessMode: neo4j.AccessModeWrite})
+	defer session.Close(ctx)
+
+	res, err := session.Run(ctx, fmt.Sprintf(`
+		MATCH (n:Symbol {repo:$repo})
+		CALL { WITH n DETACH DELETE n } IN TRANSACTIONS OF %d ROWS`, deleteBatchSize),
+		args{"repo": repo})
+	if err != nil {
+		return err
+	}
+	// An auto-commit result is lazy; consuming it is what runs the query.
+	_, err = res.Consume(ctx)
+	return err
 }
 
 // ReplaceFile removes path's subgraph and inserts the single-file subgraph g
-// (its File node, owned children, referenced Module nodes, and intra-file
-// edges). File→file import edges are managed separately via SetImports.
+// (its File node, owned children, and intra-file edges). File→file import edges
+// are managed separately via SetImports. One file is small enough to stay a
+// single transaction.
 func (s *Store) ReplaceFile(ctx context.Context, repo, path string, g *core.Graph) error {
 	err := s.write(ctx, func(tx neo4j.ManagedTransaction) error {
 		if _, err := tx.Run(ctx, `MATCH (n:Symbol {repo:$repo, path:$path}) DETACH DELETE n`,
@@ -190,7 +221,7 @@ func (s *Store) RebuildImports(ctx context.Context, repo string, edges [][2]stri
 		for i, e := range edges {
 			rows[i] = map[string]any{"from": e[0], "to": e[1]}
 		}
-		for _, chunk := range chunks(rows) {
+		for _, chunk := range chunks(rows, batchSize) {
 			if _, err := tx.Run(ctx,
 				`UNWIND $rows AS row
 				 MATCH (a:File {repo:$repo, path:row.from})
@@ -336,22 +367,18 @@ func (s *Store) SetHead(ctx context.Context, repo, headSHA string) error {
 	return nil
 }
 
-// writeSubgraph inserts g's nodes and edges. Module nodes are MERGEd (shared
-// across files); owned nodes are CREATEd (the caller has deleted the old ones).
-func writeSubgraph(ctx context.Context, tx neo4j.ManagedTransaction, repo string, g *core.Graph) error {
-	var modules []map[string]any
-	owned := map[string][]map[string]any{}
+// subgraphRows flattens g into the batches the write queries UNWIND: nodes by
+// symbol type, edges by relationship type. It is pure, so the same flattening
+// serves the per-file write and the batched full index.
+func subgraphRows(g *core.Graph) (nodes, edges map[string][]map[string]any) {
+	nodes = map[string][]map[string]any{}
 	for _, n := range g.Nodes {
 		if _, ok := nodeLabels[n.Type]; !ok {
 			continue
 		}
 		if len(n.ID) > maxIndexableIDBytes {
-			fmt.Printf("graphstore: skipping oversized %s node (%d bytes): %q…\n",
-				n.Type, len(n.ID), preview(n.ID, 100))
-			continue
-		}
-		if n.Type == "Module" {
-			modules = append(modules, map[string]any{"id": n.ID, "name": n.Name})
+			slog.Warn("skipping oversized node", "type", n.Type, "bytes", len(n.ID),
+				"id", preview(n.ID, 100))
 			continue
 		}
 		path := core.PathFromID(n.ID)
@@ -359,45 +386,89 @@ func writeSubgraph(ctx context.Context, tx neo4j.ManagedTransaction, repo string
 		if n.Type == "File" {
 			row["raw_imports"] = g.RawImports[path]
 		}
-		owned[n.Type] = append(owned[n.Type], row)
+		nodes[n.Type] = append(nodes[n.Type], row)
 	}
 
-	for _, chunk := range chunks(modules) {
-		if _, err := tx.Run(ctx,
-			`UNWIND $rows AS row
-			 MERGE (n:Symbol:Module {repo:$repo, id:row.id})
-			 ON CREATE SET n.name=row.name, n.type='Module', n.path=''`,
-			args{"repo": repo, "rows": chunk}); err != nil {
-			return err
+	edges = map[string][]map[string]any{}
+	for _, e := range g.Edges {
+		if rel, ok := edgeRels[e.Type]; ok {
+			edges[rel] = append(edges[rel], map[string]any{"from": e.From, "to": e.To})
 		}
 	}
+	return nodes, edges
+}
 
-	for typ, rows := range owned {
-		q := fmt.Sprintf(
-			`UNWIND $rows AS row
-			 CREATE (n:Symbol:%s {repo:$repo, id:row.id, name:row.name, type:row.type, path:row.path, raw_imports:row.raw_imports})`,
-			nodeLabels[typ])
-		for _, chunk := range chunks(rows) {
-			if _, err := tx.Run(ctx, q, args{"repo": repo, "rows": chunk}); err != nil {
+// createNodes is the insert for one symbol type. The caller has already deleted
+// what it replaces, so this CREATEs rather than MERGEs.
+func createNodes(typ string) string {
+	return fmt.Sprintf(
+		`UNWIND $rows AS row
+		 CREATE (n:Symbol:%s {repo:$repo, id:row.id, name:row.name, type:row.type, path:row.path, raw_imports:row.raw_imports})`,
+		nodeLabels[typ])
+}
+
+// createEdges is the insert for one relationship type.
+func createEdges(rel string) string {
+	return fmt.Sprintf(
+		`UNWIND $rows AS row
+		 MATCH (a:Symbol {repo:$repo, id:row.from})
+		 MATCH (b:Symbol {repo:$repo, id:row.to})
+		 CREATE (a)-[:%s]->(b)`, rel)
+}
+
+// writeSubgraph inserts g inside the caller's transaction. Used for per-file
+// writes, which are bounded by one file's symbols.
+func writeSubgraph(ctx context.Context, tx neo4j.ManagedTransaction, repo string, g *core.Graph) error {
+	nodes, edges := subgraphRows(g)
+	for typ, rows := range nodes {
+		for _, chunk := range chunks(rows, batchSize) {
+			if _, err := tx.Run(ctx, createNodes(typ), args{"repo": repo, "rows": chunk}); err != nil {
 				return err
 			}
 		}
 	}
-
-	byRel := map[string][]map[string]any{}
-	for _, e := range g.Edges {
-		if rel, ok := edgeRels[e.Type]; ok {
-			byRel[rel] = append(byRel[rel], map[string]any{"from": e.From, "to": e.To})
+	for rel, rows := range edges {
+		for _, chunk := range chunks(rows, batchSize) {
+			if _, err := tx.Run(ctx, createEdges(rel), args{"repo": repo, "rows": chunk}); err != nil {
+				return err
+			}
 		}
 	}
-	for rel, rows := range byRel {
-		q := fmt.Sprintf(
-			`UNWIND $rows AS row
-			 MATCH (a:Symbol {repo:$repo, id:row.from})
-			 MATCH (b:Symbol {repo:$repo, id:row.to})
-			 CREATE (a)-[:%s]->(b)`, rel)
-		for _, chunk := range chunks(rows) {
-			if _, err := tx.Run(ctx, q, args{"repo": repo, "rows": chunk}); err != nil {
+	return nil
+}
+
+// writeSubgraphBatched inserts g one transaction per chunk, so a repository's
+// size bounds how long the write takes rather than whether it fits. Every node
+// is committed before any relationship: an edge MATCHes both endpoints, so the
+// nodes must already be visible to other transactions.
+func (s *Store) writeSubgraphBatched(ctx context.Context, repo string, g *core.Graph) error {
+	nodes, edges := subgraphRows(g)
+
+	// One session for every batch: leasing a connection per batch would be most
+	// of the cost across thousands of transactions.
+	session := s.driver.NewSession(ctx, neo4j.SessionConfig{AccessMode: neo4j.AccessModeWrite})
+	defer session.Close(ctx)
+
+	run := func(cypher string, chunk []map[string]any) error {
+		_, err := session.ExecuteWrite(ctx, func(tx neo4j.ManagedTransaction) (any, error) {
+			_, err := tx.Run(ctx, cypher, args{"repo": repo, "rows": chunk})
+			return nil, err
+		})
+		return err
+	}
+
+	for typ, rows := range nodes {
+		q := createNodes(typ)
+		for _, chunk := range chunks(rows, writeBatchSize) {
+			if err := run(q, chunk); err != nil {
+				return err
+			}
+		}
+	}
+	for rel, rows := range edges {
+		q := createEdges(rel)
+		for _, chunk := range chunks(rows, writeBatchSize) {
+			if err := run(q, chunk); err != nil {
 				return err
 			}
 		}
@@ -427,10 +498,10 @@ func (s *Store) read(ctx context.Context, consume func(res neo4j.ResultWithConte
 	return consume(res)
 }
 
-func chunks(rows []map[string]any) [][]map[string]any {
+func chunks(rows []map[string]any, size int) [][]map[string]any {
 	var out [][]map[string]any
-	for i := 0; i < len(rows); i += batchSize {
-		out = append(out, rows[i:min(i+batchSize, len(rows))])
+	for i := 0; i < len(rows); i += size {
+		out = append(out, rows[i:min(i+size, len(rows))])
 	}
 	return out
 }
